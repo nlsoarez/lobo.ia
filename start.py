@@ -1,22 +1,20 @@
 import time
 import traceback
+import subprocess
 from datetime import datetime
 from logger import Logger
 
-# Inicializa o logger SQLite
 logger = Logger()
 
-# Função para verificar se o mercado está aberto
 def mercado_aberto():
     agora = datetime.now()
     return agora.weekday() < 5 and 10 <= agora.hour < 18  # Segunda a sexta, das 10h às 18h
 
-# Simulação de execução do Lobo IA
 def executar_lobo():
     try:
         print("Executando Lobo IA...")
-        # Aqui você chamaria os módulos reais, como:
-        # analise_tecnica(), decisao_trade(), etc.
+        # Chama o main.py para executar lógica principal
+        subprocess.run(["python3", "main.py"])
         logger.log_trade({
             'symbol': 'LOBO',
             'date': str(datetime.now()),
@@ -24,8 +22,8 @@ def executar_lobo():
             'price': 0,
             'quantity': 0,
             'profit': 0,
-            'indicators': 'sistema iniciado',
-            'notes': 'Lobo IA executado com sucesso.'
+            'indicators': 'execução',
+            'notes': 'main.py executado com sucesso.'
         })
     except Exception as e:
         erro = traceback.format_exc()
@@ -40,7 +38,6 @@ def executar_lobo():
             'notes': erro
         })
 
-# Loop principal com melhorias
 if __name__ == "__main__":
     logger.log_trade({
         'symbol': 'LOBO',
@@ -49,7 +46,7 @@ if __name__ == "__main__":
         'price': 0,
         'quantity': 0,
         'profit': 0,
-        'indicators': 'sistema iniciado',
+        'indicators': 'início',
         'notes': 'Lobo IA iniciado.'
     })
     try:
@@ -67,6 +64,6 @@ if __name__ == "__main__":
             'price': 0,
             'quantity': 0,
             'profit': 0,
-            'indicators': 'sistema encerrado',
+            'indicators': 'encerrado',
             'notes': 'Lobo IA encerrado manualmente.'
         })
