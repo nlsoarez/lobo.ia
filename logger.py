@@ -7,7 +7,7 @@ class Logger:
 
     def create_table(self):
         cursor = self.conn.cursor()
-        cursor.execute(\"\"\"
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT,
@@ -19,15 +19,15 @@ class Logger:
                 indicators TEXT,
                 notes TEXT
             )
-        \"\"\")
+        """)
         self.conn.commit()
 
     def log_trade(self, trade):
         cursor = self.conn.cursor()
-        cursor.execute(\"\"\"
+        cursor.execute("""
             INSERT INTO trades (symbol, date, action, price, quantity, profit, indicators, notes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        \"\"\", (
+        """, (
             trade['symbol'], trade['date'], trade['action'], trade['price'],
             trade['quantity'], trade['profit'], trade['indicators'], trade['notes']
         ))
