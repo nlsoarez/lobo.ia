@@ -8,9 +8,14 @@ class DataCollector:
         self.interval = interval
 
     def get_data(self):
+        # Coleta dados do Yahoo Finance
         df = yf.download(self.symbol, period=self.period, interval=self.interval)
+
+        # Verifica se retornou dados
         if df.empty:
-            raise ValueError("Nenhum dado retornado. Verifique o símbolo ou conexão.")
+            raise ValueError(f"Nenhum dado retornado para {self.symbol}. Verifique o símbolo ou conexão.")
+
+        # Renomeia colunas para padrão esperado
         df = df.rename(columns={
             "Open": "open",
             "High": "high",
@@ -18,5 +23,8 @@ class DataCollector:
             "Close": "close",
             "Volume": "volume"
         })
+
+        # Remove linhas com valores nulos
         df.dropna(inplace=True)
+
         return df
