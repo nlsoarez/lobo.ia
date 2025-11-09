@@ -4,12 +4,10 @@ from logger import Logger
 logger = Logger()
 
 def analisar_sinais():
-    # Aqui você implementa análise técnica real
-    # Exemplo simples:
+    # Exemplo simples: sinal fixo
     return {"symbol": "PETR4", "action": "BUY", "price": 35.50, "quantity": 10}
 
 def executar_trade(sinal):
-    # Simulação de execução
     print(f"Executando trade: {sinal}")
     logger.log_trade({
         'symbol': sinal['symbol'],
