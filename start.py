@@ -13,8 +13,7 @@ def mercado_aberto():
 def executar_lobo():
     try:
         print("Executando Lobo IA...")
-        # Chama o main.py para executar lógica principal
-        subprocess.run(["python3", "main.py"])
+        subprocess.run(["python3", "main.py"])  # ✅ Corrigido para python3
         logger.log_trade({
             'symbol': 'LOBO',
             'date': str(datetime.now()),
