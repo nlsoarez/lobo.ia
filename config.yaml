@@ -1,0 +1,151 @@
+# Configuração do Lobo IA - Sistema de Trading Autônomo
+
+# Configurações de Trading
+trading:
+  # Símbolos para negociação (sufixo .SA para B3)
+  symbols:
+    - PETR4.SA
+    - VALE3.SA
+    - ITUB4.SA
+
+  # Capital inicial em R$
+  capital: 10000.0
+
+  # Exposição por operação (% do capital)
+  exposure: 0.03  # 3%
+
+  # Exposição máxima total (% do capital)
+  max_total_exposure: 0.20  # 20%
+
+# Configurações de Estratégia
+strategy:
+  # Indicadores técnicos
+  indicators:
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    ema_period: 21
+    ema_fast: 9
+    ema_slow: 21
+
+  # Parâmetros de entrada/saída
+  min_signal_strength: 0.6  # 0-1
+
+# Configurações de Dados
+data:
+  # Período de dados históricos
+  period: "5d"  # 1d, 5d, 1mo, 3mo, 6mo, 1y
+
+  # Intervalo de candles
+  interval: "5m"  # 1m, 2m, 5m, 15m, 30m, 60m, 1h, 1d
+
+  # Cache de dados (em segundos)
+  cache_ttl: 300  # 5 minutos
+
+  # Timeout para requisições (em segundos)
+  request_timeout: 30
+
+  # Número de tentativas em caso de falha
+  max_retries: 3
+
+  # Delay entre tentativas (em segundos)
+  retry_delay: 2
+
+# Configurações de Risco
+risk:
+  # Stop loss (% de perda máxima por operação)
+  stop_loss: 0.02  # 2%
+
+  # Take profit (% de ganho alvo por operação)
+  take_profit: 0.05  # 5%
+
+  # Drawdown máximo (% de perda máxima do capital total)
+  max_drawdown: 0.10  # 10%
+
+  # Trailing stop (ativa após ganho de X%)
+  trailing_stop_activation: 0.03  # 3%
+  trailing_stop_distance: 0.015  # 1.5%
+
+# Configurações de Mercado
+market:
+  # Horário de funcionamento da B3
+  open_hour: 10
+  close_hour: 18
+
+  # Dias da semana (0=segunda, 4=sexta)
+  trading_days: [0, 1, 2, 3, 4]
+
+  # Considerar feriados brasileiros
+  check_holidays: true
+
+  # Intervalo entre verificações (em segundos)
+  check_interval: 60
+
+# Configurações de Banco de Dados
+database:
+  # Nome do arquivo SQLite
+  db_name: "trades.db"
+
+  # Backup automático
+  auto_backup: true
+  backup_interval_hours: 24
+
+# Configurações de Logging
+logging:
+  # Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  level: "INFO"
+
+  # Diretório de logs
+  log_dir: "logs"
+
+  # Formato do arquivo de log
+  log_file_format: "lobo_{date}.log"
+
+  # Tamanho máximo do arquivo (em MB)
+  max_file_size_mb: 10
+
+  # Número de arquivos de backup
+  backup_count: 5
+
+  # Log no console também
+  console_output: true
+
+# Configurações de Aprendizado
+learning:
+  # Ativar módulo de aprendizado
+  enabled: true
+
+  # Número mínimo de trades para avaliar performance
+  min_trades_for_evaluation: 10
+
+  # Frequência de avaliação (em número de trades)
+  evaluation_frequency: 20
+
+  # Métricas a acompanhar
+  metrics:
+    - win_rate
+    - profit_factor
+    - sharpe_ratio
+    - max_drawdown
+    - avg_profit_per_trade
+
+# Configurações de Execução
+execution:
+  # Modo de execução (simulation, paper, live)
+  mode: "simulation"
+
+  # Simular slippage (% do preço)
+  simulate_slippage: 0.001  # 0.1%
+
+  # Simular taxas de corretagem (% do valor da operação)
+  simulate_fees: 0.0005  # 0.05%
+
+  # Delay de execução simulada (em segundos)
+  execution_delay: 1
+
+# Configurações de Notificação (futuro)
+notifications:
+  enabled: false
+  email: ""
+  telegram_token: ""
+  telegram_chat_id: ""
