@@ -48,3 +48,23 @@ Thumbs.db
 
 # Project specific
 trades.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+.tox/
+
+# Models (ML)
+models/*.pkl
+models/*.joblib
+
+# Backtest results
+backtest_*.csv
+trades_export.csv
+trade_history.csv
+
+# Streamlit
+.streamlit/
