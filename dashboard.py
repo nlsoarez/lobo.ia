@@ -1,6 +1,6 @@
 """
-Dashboard interativo do Lobo IA usando Streamlit.
-Visualize performance, posições, histórico e execute backtests.
+Dashboard interativo do Lobo IA - Monitoramento em Tempo Real.
+Visualize transacoes, ganhos/perdas, saldo e status do sistema.
 
 Execute com: streamlit run dashboard.py
 """
@@ -10,22 +10,38 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
-import sqlite3
+import os
 import sys
 
-# Adiciona diretório raiz ao path
+# Adiciona diretorio raiz ao path
 sys.path.insert(0, '.')
 
 from logger import Logger
-from portfolio_manager import PortfolioManager
-from backtesting import Backtester
-from learning_module import LearningModule
 from config_loader import config
 
+# Tenta importar modulos opcionais
+try:
+    from b3_calendar import is_holiday, is_weekend, is_trading_day, get_next_trading_day
+    HAS_CALENDAR = True
+except ImportError:
+    HAS_CALENDAR = False
 
-# Configuração da página
+try:
+    from crypto_scanner import CryptoScanner
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
+
+try:
+    from market_scanner import MarketScanner
+    HAS_SCANNER = True
+except ImportError:
+    HAS_SCANNER = False
+
+
+# Configuracao da pagina
 st.set_page_config(
-    page_title="Lobo IA Dashboard",
+    page_title="Lobo IA - Dashboard",
     page_icon="🐺",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -34,152 +50,208 @@ st.set_page_config(
 # CSS customizado
 st.markdown("""
 <style>
-    .big-metric {
-        font-size: 2rem;
+    .main-header {
+        font-size: 2.5rem;
         font-weight: bold;
+        text-align: center;
+        padding: 1rem;
+        background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 10px;
+        margin-bottom: 1rem;
     }
-    .positive {
-        color: #00ff00;
+    .metric-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid #0f3460;
     }
-    .negative {
-        color: #ff0000;
+    .positive { color: #00ff00 !important; }
+    .negative { color: #ff4444 !important; }
+    .neutral { color: #ffaa00 !important; }
+    .status-online { color: #00ff00; }
+    .status-offline { color: #ff4444; }
+    .trade-buy { background-color: rgba(0, 255, 0, 0.1); }
+    .trade-sell { background-color: rgba(255, 0, 0, 0.1); }
+    div[data-testid="stMetricValue"] { font-size: 1.5rem; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #1a1a2e;
+        border-radius: 5px;
+        padding: 10px 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=60)
-def load_trades():
+# ============================================================================
+# FUNCOES DE CARREGAMENTO DE DADOS
+# ============================================================================
+
+@st.cache_data(ttl=30)
+def load_trades(limit=500):
     """Carrega trades do banco de dados."""
     try:
         with Logger() as logger:
-            trades = logger.get_trades(limit=1000)
-        return pd.DataFrame(trades)
+            trades = logger.get_trades(limit=limit)
+        df = pd.DataFrame(trades)
+        if not df.empty and 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+        return df
     except Exception as e:
-        st.error(f"Erro ao carregar trades: {e}")
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def load_performance_stats():
-    """Carrega estatísticas de performance."""
+    """Carrega estatisticas de performance."""
     try:
         with Logger() as logger:
             stats = logger.get_performance_stats()
         return stats
     except Exception as e:
-        st.error(f"Erro ao carregar estatísticas: {e}")
         return {}
 
 
-def main():
-    """Função principal do dashboard."""
+def get_market_status():
+    """Retorna status dos mercados."""
+    now = datetime.now()
+
+    b3_status = {
+        'name': 'B3',
+        'is_open': False,
+        'reason': 'Indisponivel',
+        'next_open': 'N/A'
+    }
+
+    crypto_status = {
+        'name': 'Crypto',
+        'is_open': True,  # Crypto 24/7
+        'reason': '24/7',
+        'next_open': 'Sempre aberto'
+    }
+
+    if HAS_CALENDAR:
+        if is_weekend(now):
+            b3_status['reason'] = 'Fim de semana'
+            b3_status['is_open'] = False
+        elif is_holiday(now):
+            b3_status['reason'] = 'Feriado'
+            b3_status['is_open'] = False
+        elif 10 <= now.hour < 18:
+            b3_status['is_open'] = True
+            b3_status['reason'] = 'Aberto'
+        else:
+            b3_status['reason'] = 'Fora do horario'
+            b3_status['is_open'] = False
+
+        b3_status['next_open'] = get_next_trading_day(now).strftime('%d/%m/%Y')
+
+    return {'b3': b3_status, 'crypto': crypto_status}
+
+
+# ============================================================================
+# PAGINA PRINCIPAL - DASHBOARD
+# ============================================================================
+
+def show_main_dashboard():
+    """Dashboard principal com metricas em tempo real."""
 
     # Header
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col2:
-        st.title("🐺 LOBO IA - Dashboard de Trading")
-        st.caption("Sistema Autônomo de Trading Inteligente")
+    st.markdown('<div class="main-header">🐺 LOBO IA - Dashboard de Trading</div>', unsafe_allow_html=True)
 
-    # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Configurações")
+    # Status dos mercados
+    market_status = get_market_status()
 
-        page = st.radio(
-            "Navegação",
-            ["📊 Overview", "📈 Performance", "💼 Posições", "🔍 Histórico", "🔬 Backtesting", "🤖 Machine Learning"],
-            label_visibility="collapsed"
-        )
-
-        st.divider()
-
-        st.subheader("Status do Sistema")
-        status_col1, status_col2 = st.columns(2)
-
-        # Simula status (em produção, ler de arquivo/API)
-        with status_col1:
-            st.metric("Status", "🟢 ATIVO")
-        with status_col2:
-            st.metric("Modo", "SIMULAÇÃO")
-
-        st.divider()
-
-        # Botão de refresh
-        if st.button("🔄 Atualizar Dados", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-    # Páginas
-    if page == "📊 Overview":
-        show_overview()
-    elif page == "📈 Performance":
-        show_performance()
-    elif page == "💼 Posições":
-        show_positions()
-    elif page == "🔍 Histórico":
-        show_history()
-    elif page == "🔬 Backtesting":
-        show_backtesting()
-    elif page == "🤖 Machine Learning":
-        show_machine_learning()
-
-
-def show_overview():
-    """Mostra overview geral do sistema."""
-    st.header("📊 Overview Geral")
-
-    # Carrega dados
-    stats = load_performance_stats()
-    trades_df = load_trades()
-
-    # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        total_profit = stats.get('total_profit', 0)
-        color = "normal" if total_profit >= 0 else "inverse"
+        b3 = market_status['b3']
+        status_icon = "🟢" if b3['is_open'] else "🔴"
         st.metric(
-            "💰 Lucro Total",
-            f"R$ {total_profit:,.2f}",
-            delta=f"{(total_profit / 10000) * 100:.2f}%" if total_profit != 0 else None,
-            delta_color=color
+            f"{status_icon} B3",
+            b3['reason'],
+            f"Proximo: {b3['next_open']}" if not b3['is_open'] else "Operando"
         )
 
     with col2:
+        crypto = market_status['crypto']
+        st.metric(
+            "🟢 Crypto",
+            crypto['reason'],
+            "BTC, ETH, SOL..."
+        )
+
+    with col3:
+        mode = config.get('execution.mode', 'simulation')
+        mode_display = "SIMULACAO" if mode == "simulation" else "REAL"
+        mode_icon = "🎮" if mode == "simulation" else "💰"
+        st.metric(f"{mode_icon} Modo", mode_display)
+
+    with col4:
+        st.metric("🕐 Atualizado", datetime.now().strftime("%H:%M:%S"))
+
+    st.divider()
+
+    # Metricas financeiras principais
+    stats = load_performance_stats()
+    trades_df = load_trades()
+
+    capital_inicial = config.get('trading.capital', 10000)
+    capital_atual = capital_inicial + stats.get('total_profit', 0)
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        st.metric(
+            "💰 Saldo Atual",
+            f"R$ {capital_atual:,.2f}",
+            f"{((capital_atual/capital_inicial)-1)*100:+.2f}%"
+        )
+
+    with col2:
+        total_profit = stats.get('total_profit', 0)
+        st.metric(
+            "📈 Lucro/Prejuizo",
+            f"R$ {total_profit:,.2f}",
+            f"{'Ganho' if total_profit >= 0 else 'Perda'}",
+            delta_color="normal" if total_profit >= 0 else "inverse"
+        )
+
+    with col3:
         win_rate = stats.get('win_rate', 0)
         st.metric(
             "🎯 Win Rate",
             f"{win_rate:.1f}%",
-            delta=f"{win_rate - 50:.1f}% vs 50%",
+            f"{win_rate - 50:+.1f}% vs 50%",
             delta_color="normal" if win_rate >= 50 else "inverse"
         )
 
-    with col3:
-        total_trades = stats.get('total_trades', 0)
-        st.metric("📊 Total de Trades", total_trades)
-
     with col4:
+        total_trades = stats.get('total_trades', 0)
+        st.metric("📊 Total Trades", total_trades)
+
+    with col5:
         wins = stats.get('wins', 0)
         losses = stats.get('losses', 0)
-        st.metric("✅ Wins / ❌ Losses", f"{wins} / {losses}")
+        st.metric("✅/❌ W/L", f"{wins}/{losses}")
 
     st.divider()
 
-    # Gráficos
-    if not trades_df.empty:
-        col1, col2 = st.columns(2)
+    # Graficos principais
+    col1, col2 = st.columns(2)
 
-        with col1:
-            st.subheader("📈 Evolução do Capital")
+    with col1:
+        st.subheader("📈 Evolucao do Capital")
 
-            # Calcula lucro acumulado
-            trades_df['cumulative_profit'] = trades_df['profit'].cumsum()
-            trades_df['capital'] = 10000 + trades_df['cumulative_profit']
+        if not trades_df.empty and 'profit' in trades_df.columns:
+            trades_df_sorted = trades_df.sort_values('date')
+            trades_df_sorted['cumulative_profit'] = trades_df_sorted['profit'].cumsum()
+            trades_df_sorted['capital'] = capital_inicial + trades_df_sorted['cumulative_profit']
 
             fig = go.Figure()
             fig.add_trace(go.Scatter(
-                x=trades_df.index,
-                y=trades_df['capital'],
+                x=trades_df_sorted['date'],
+                y=trades_df_sorted['capital'],
                 mode='lines',
                 name='Capital',
                 line=dict(color='#00ff00', width=2),
@@ -187,195 +259,112 @@ def show_overview():
                 fillcolor='rgba(0, 255, 0, 0.1)'
             ))
 
-            fig.update_layout(
-                xaxis_title="Trade #",
-                yaxis_title="Capital (R$)",
-                hovermode='x unified',
-                height=300
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.subheader("📊 Distribuição de Lucros")
-
-            fig = go.Figure()
-            fig.add_trace(go.Histogram(
-                x=trades_df['profit'],
-                nbinsx=20,
-                name='Lucros',
-                marker_color='#00ff00',
-                opacity=0.75
-            ))
-
-            fig.update_layout(
-                xaxis_title="Lucro (R$)",
-                yaxis_title="Frequência",
-                hovermode='x unified',
-                height=300
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-    else:
-        st.info("📭 Nenhum trade registrado ainda. Execute o sistema para ver dados.")
-
-
-def show_performance():
-    """Mostra análise detalhada de performance."""
-    st.header("📈 Análise de Performance")
-
-    trades_df = load_trades()
-
-    if trades_df.empty:
-        st.info("📭 Nenhum trade registrado.")
-        return
-
-    # Tabs
-    tab1, tab2, tab3 = st.tabs(["📊 Métricas", "📉 Drawdown", "🕒 Análise Temporal"])
-
-    with tab1:
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.metric("💵 Lucro Médio", f"R$ {trades_df['profit'].mean():.2f}")
-            st.metric("📈 Maior Lucro", f"R$ {trades_df['profit'].max():.2f}")
-            st.metric("📉 Maior Perda", f"R$ {trades_df['profit'].min():.2f}")
-
-        with col2:
-            wins = trades_df[trades_df['profit'] > 0]
-            losses = trades_df[trades_df['profit'] < 0]
-
-            avg_win = wins['profit'].mean() if len(wins) > 0 else 0
-            avg_loss = losses['profit'].mean() if len(losses) > 0 else 0
-
-            st.metric("💚 Lucro Médio (Wins)", f"R$ {avg_win:.2f}")
-            st.metric("💔 Perda Média (Losses)", f"R$ {avg_loss:.2f}")
-
-            if avg_loss != 0:
-                ratio = abs(avg_win / avg_loss)
-                st.metric("⚖️ Ratio Win/Loss", f"{ratio:.2f}")
-
-        with col3:
-            gross_profit = wins['profit'].sum() if len(wins) > 0 else 0
-            gross_loss = abs(losses['profit'].sum()) if len(losses) > 0 else 1
-
-            profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
-
-            st.metric("🏆 Profit Factor", f"{profit_factor:.2f}")
-            st.metric("💰 Lucro Bruto", f"R$ {gross_profit:.2f}")
-            st.metric("💸 Perda Bruta", f"R$ {gross_loss:.2f}")
-
-    with tab2:
-        st.subheader("📉 Análise de Drawdown")
-
-        # Calcula drawdown
-        trades_df['cumulative_profit'] = trades_df['profit'].cumsum()
-        trades_df['running_max'] = trades_df['cumulative_profit'].cummax()
-        trades_df['drawdown'] = trades_df['cumulative_profit'] - trades_df['running_max']
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=trades_df.index,
-            y=trades_df['drawdown'],
-            mode='lines',
-            name='Drawdown',
-            line=dict(color='red', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(255, 0, 0, 0.2)'
-        ))
-
-        fig.update_layout(
-            xaxis_title="Trade #",
-            yaxis_title="Drawdown (R$)",
-            hovermode='x unified',
-            height=400
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        max_dd = trades_df['drawdown'].min()
-        st.metric("📉 Drawdown Máximo", f"R$ {abs(max_dd):.2f}")
-
-    with tab3:
-        st.subheader("🕒 Performance ao Longo do Tempo")
-
-        if 'date' in trades_df.columns:
-            trades_df['date'] = pd.to_datetime(trades_df['date'])
-            trades_df['day'] = trades_df['date'].dt.date
-
-            daily_profit = trades_df.groupby('day')['profit'].sum().reset_index()
-
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=daily_profit['day'],
-                y=daily_profit['profit'],
-                name='Lucro Diário',
-                marker_color=['green' if p >= 0 else 'red' for p in daily_profit['profit']]
-            ))
+            # Linha de capital inicial
+            fig.add_hline(y=capital_inicial, line_dash="dash",
+                         line_color="yellow", annotation_text="Capital Inicial")
 
             fig.update_layout(
                 xaxis_title="Data",
-                yaxis_title="Lucro (R$)",
+                yaxis_title="Capital (R$)",
                 hovermode='x unified',
-                height=400
+                height=350,
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
             )
 
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Aguardando trades para exibir grafico...")
+
+    with col2:
+        st.subheader("📊 Lucro por Trade")
+
+        if not trades_df.empty and 'profit' in trades_df.columns:
+            # Ultimos 20 trades
+            recent_trades = trades_df.sort_values('date', ascending=False).head(20)
+
+            colors = ['#00ff00' if p >= 0 else '#ff4444' for p in recent_trades['profit']]
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=list(range(len(recent_trades))),
+                y=recent_trades['profit'],
+                marker_color=colors,
+                name='Lucro'
+            ))
+
+            fig.add_hline(y=0, line_color="white", line_width=1)
+
+            fig.update_layout(
+                xaxis_title="Trade #",
+                yaxis_title="Lucro (R$)",
+                height=350,
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Aguardando trades para exibir grafico...")
+
+    st.divider()
+
+    # Transacoes recentes
+    st.subheader("🔄 Transacoes Recentes")
+
+    if not trades_df.empty:
+        recent = trades_df.sort_values('date', ascending=False).head(10)
+
+        # Formata tabela
+        display_df = recent[['symbol', 'date', 'action', 'price', 'quantity', 'profit']].copy()
+        display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%d/%m %H:%M')
+        display_df['price'] = display_df['price'].apply(lambda x: f"R$ {x:.2f}")
+        display_df['profit'] = display_df['profit'].apply(
+            lambda x: f"R$ {x:+.2f}" if x != 0 else "-"
+        )
+        display_df.columns = ['Simbolo', 'Data', 'Acao', 'Preco', 'Qtd', 'Resultado']
+
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("📭 Nenhuma transacao registrada ainda.")
 
 
-def show_positions():
-    """Mostra posições abertas."""
-    st.header("💼 Posições Abertas")
+# ============================================================================
+# PAGINA DE TRANSACOES
+# ============================================================================
 
-    st.info("ℹ️ Em modo simulação. Posições não são persistidas entre execuções.")
+def show_transactions():
+    """Pagina de historico de transacoes."""
+    st.header("🔍 Historico de Transacoes")
 
-    # Exemplo de estrutura (em produção, ler de arquivo ou API)
-    positions_data = {
-        'Símbolo': ['PETR4.SA', 'VALE3.SA'],
-        'Quantidade': [10, 5],
-        'Preço Médio': [35.50, 75.20],
-        'Preço Atual': [36.20, 74.80],
-        'P&L': [7.00, -2.00],
-        'P&L %': [1.97, -0.53]
-    }
-
-    df_pos = pd.DataFrame(positions_data)
-
-    st.dataframe(
-        df_pos.style.applymap(
-            lambda x: 'color: green' if isinstance(x, (int, float)) and x > 0 else ('color: red' if isinstance(x, (int, float)) and x < 0 else ''),
-            subset=['P&L', 'P&L %']
-        ),
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-def show_history():
-    """Mostra histórico completo de trades."""
-    st.header("🔍 Histórico de Trades")
-
-    trades_df = load_trades()
+    trades_df = load_trades(limit=1000)
 
     if trades_df.empty:
-        st.info("📭 Nenhum trade registrado.")
+        st.info("📭 Nenhum trade registrado ainda.")
         return
 
     # Filtros
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        symbols = ['Todos'] + list(trades_df['symbol'].unique())
-        selected_symbol = st.selectbox("Símbolo", symbols)
+        symbols = ['Todos'] + sorted(trades_df['symbol'].unique().tolist())
+        selected_symbol = st.selectbox("Simbolo", symbols)
 
     with col2:
         actions = ['Todos', 'BUY', 'SELL']
-        selected_action = st.selectbox("Ação", actions)
+        selected_action = st.selectbox("Acao", actions)
 
     with col3:
-        profit_filter = st.selectbox("Resultado", ['Todos', 'Lucro', 'Prejuízo'])
+        result_filter = st.selectbox("Resultado", ['Todos', 'Lucro', 'Prejuizo', 'Neutro'])
+
+    with col4:
+        date_range = st.selectbox("Periodo", ['Todos', 'Hoje', '7 dias', '30 dias'])
 
     # Aplica filtros
     filtered_df = trades_df.copy()
@@ -386,162 +375,395 @@ def show_history():
     if selected_action != 'Todos':
         filtered_df = filtered_df[filtered_df['action'] == selected_action]
 
-    if profit_filter == 'Lucro':
+    if result_filter == 'Lucro':
         filtered_df = filtered_df[filtered_df['profit'] > 0]
-    elif profit_filter == 'Prejuízo':
+    elif result_filter == 'Prejuizo':
         filtered_df = filtered_df[filtered_df['profit'] < 0]
+    elif result_filter == 'Neutro':
+        filtered_df = filtered_df[filtered_df['profit'] == 0]
 
-    # Mostra tabela
-    st.dataframe(
-        filtered_df[['symbol', 'date', 'action', 'price', 'quantity', 'profit']],
-        use_container_width=True,
-        hide_index=True
-    )
+    if date_range != 'Todos' and 'date' in filtered_df.columns:
+        now = datetime.now()
+        if date_range == 'Hoje':
+            filtered_df = filtered_df[filtered_df['date'].dt.date == now.date()]
+        elif date_range == '7 dias':
+            filtered_df = filtered_df[filtered_df['date'] >= now - timedelta(days=7)]
+        elif date_range == '30 dias':
+            filtered_df = filtered_df[filtered_df['date'] >= now - timedelta(days=30)]
 
-    # Botão de exportação
-    if st.button("💾 Exportar para CSV"):
-        filtered_df.to_csv('trades_export.csv', index=False)
-        st.success("✅ Trades exportados para trades_export.csv")
+    # Metricas do filtro
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Total Filtrado", len(filtered_df))
+    with col2:
+        profit_sum = filtered_df['profit'].sum() if not filtered_df.empty else 0
+        st.metric("Lucro Total", f"R$ {profit_sum:,.2f}")
+    with col3:
+        wins = len(filtered_df[filtered_df['profit'] > 0]) if not filtered_df.empty else 0
+        st.metric("Ganhos", wins)
+    with col4:
+        losses = len(filtered_df[filtered_df['profit'] < 0]) if not filtered_df.empty else 0
+        st.metric("Perdas", losses)
+
+    st.divider()
+
+    # Tabela de transacoes
+    if not filtered_df.empty:
+        display_df = filtered_df[['symbol', 'date', 'action', 'price', 'quantity', 'profit']].copy()
+        display_df = display_df.sort_values('date', ascending=False)
+        display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%d/%m/%Y %H:%M')
+
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'symbol': 'Simbolo',
+                'date': 'Data',
+                'action': 'Acao',
+                'price': st.column_config.NumberColumn('Preco', format="R$ %.2f"),
+                'quantity': 'Qtd',
+                'profit': st.column_config.NumberColumn('Lucro', format="R$ %.2f")
+            }
+        )
+
+        # Exportar
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            csv = filtered_df.to_csv(index=False)
+            st.download_button(
+                "📥 Exportar CSV",
+                csv,
+                "trades_export.csv",
+                "text/csv",
+                use_container_width=True
+            )
+    else:
+        st.warning("Nenhum trade encontrado com os filtros selecionados.")
 
 
-def show_backtesting():
-    """Interface de backtesting."""
-    st.header("🔬 Backtesting")
+# ============================================================================
+# PAGINA DE ANALISE DE PERFORMANCE
+# ============================================================================
 
-    st.markdown("""
-    Execute backtests para testar estratégias em dados históricos.
-    """)
+def show_performance():
+    """Pagina de analise de performance."""
+    st.header("📈 Analise de Performance")
+
+    trades_df = load_trades()
+    stats = load_performance_stats()
+
+    if trades_df.empty:
+        st.info("📭 Nenhum trade registrado ainda.")
+        return
+
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["📊 Metricas", "📉 Drawdown", "📅 Por Periodo"])
+
+    with tab1:
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.subheader("Lucros")
+            st.metric("Lucro Medio", f"R$ {trades_df['profit'].mean():.2f}")
+            st.metric("Maior Lucro", f"R$ {trades_df['profit'].max():.2f}")
+            st.metric("Maior Perda", f"R$ {trades_df['profit'].min():.2f}")
+
+        with col2:
+            wins = trades_df[trades_df['profit'] > 0]
+            losses = trades_df[trades_df['profit'] < 0]
+
+            avg_win = wins['profit'].mean() if len(wins) > 0 else 0
+            avg_loss = losses['profit'].mean() if len(losses) > 0 else 0
+
+            st.subheader("Medias")
+            st.metric("Media Ganhos", f"R$ {avg_win:.2f}")
+            st.metric("Media Perdas", f"R$ {avg_loss:.2f}")
+
+            if avg_loss != 0:
+                ratio = abs(avg_win / avg_loss)
+                st.metric("Ratio W/L", f"{ratio:.2f}")
+
+        with col3:
+            gross_profit = wins['profit'].sum() if len(wins) > 0 else 0
+            gross_loss = abs(losses['profit'].sum()) if len(losses) > 0 else 1
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+
+            st.subheader("Totais")
+            st.metric("Profit Factor", f"{profit_factor:.2f}")
+            st.metric("Lucro Bruto", f"R$ {gross_profit:.2f}")
+            st.metric("Perda Bruta", f"R$ {gross_loss:.2f}")
+
+    with tab2:
+        st.subheader("Analise de Drawdown")
+
+        trades_sorted = trades_df.sort_values('date')
+        trades_sorted['cumulative_profit'] = trades_sorted['profit'].cumsum()
+        trades_sorted['running_max'] = trades_sorted['cumulative_profit'].cummax()
+        trades_sorted['drawdown'] = trades_sorted['cumulative_profit'] - trades_sorted['running_max']
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=trades_sorted['date'],
+            y=trades_sorted['drawdown'],
+            mode='lines',
+            name='Drawdown',
+            line=dict(color='#ff4444', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(255, 68, 68, 0.2)'
+        ))
+
+        fig.update_layout(
+            xaxis_title="Data",
+            yaxis_title="Drawdown (R$)",
+            height=400,
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        max_dd = trades_sorted['drawdown'].min()
+        st.metric("Drawdown Maximo", f"R$ {abs(max_dd):.2f}")
+
+    with tab3:
+        st.subheader("Performance por Periodo")
+
+        if 'date' in trades_df.columns:
+            trades_df['date'] = pd.to_datetime(trades_df['date'])
+            trades_df['day'] = trades_df['date'].dt.date
+
+            daily_profit = trades_df.groupby('day').agg({
+                'profit': 'sum',
+                'id': 'count'
+            }).reset_index()
+            daily_profit.columns = ['Data', 'Lucro', 'Trades']
+
+            fig = go.Figure()
+            colors = ['#00ff00' if p >= 0 else '#ff4444' for p in daily_profit['Lucro']]
+
+            fig.add_trace(go.Bar(
+                x=daily_profit['Data'],
+                y=daily_profit['Lucro'],
+                marker_color=colors,
+                name='Lucro Diario'
+            ))
+
+            fig.add_hline(y=0, line_color="white", line_width=1)
+
+            fig.update_layout(
+                xaxis_title="Data",
+                yaxis_title="Lucro (R$)",
+                height=400,
+                template='plotly_dark',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+
+# ============================================================================
+# PAGINA DE SCANNER DE MERCADO
+# ============================================================================
+
+def show_market_scanner():
+    """Pagina do scanner de mercado."""
+    st.header("🔍 Scanner de Mercado")
+
+    tab1, tab2 = st.tabs(["🇧🇷 B3 - Acoes", "₿ Criptomoedas"])
+
+    with tab1:
+        if HAS_SCANNER:
+            if st.button("🔄 Escanear B3", use_container_width=True):
+                with st.spinner("Escaneando mercado B3..."):
+                    scanner = MarketScanner()
+                    results = scanner.scan_market()
+
+                    if results:
+                        df = pd.DataFrame(results[:20])
+
+                        st.success(f"Encontradas {len(results)} acoes!")
+
+                        st.dataframe(
+                            df[['symbol', 'price', 'total_score', 'signal', 'rsi', 'change_5d']],
+                            use_container_width=True,
+                            column_config={
+                                'symbol': 'Simbolo',
+                                'price': st.column_config.NumberColumn('Preco', format="R$ %.2f"),
+                                'total_score': st.column_config.NumberColumn('Score', format="%.1f"),
+                                'signal': 'Sinal',
+                                'rsi': st.column_config.NumberColumn('RSI', format="%.1f"),
+                                'change_5d': st.column_config.NumberColumn('Var 5d', format="%.2f%%")
+                            }
+                        )
+                    else:
+                        st.warning("Nenhum resultado encontrado.")
+        else:
+            st.warning("Scanner B3 nao disponivel.")
+
+    with tab2:
+        if HAS_CRYPTO:
+            if st.button("🔄 Escanear Crypto", use_container_width=True):
+                with st.spinner("Escaneando mercado crypto..."):
+                    scanner = CryptoScanner()
+                    results = scanner.scan_crypto_market()
+
+                    if results:
+                        df = pd.DataFrame(results[:15])
+
+                        st.success(f"Analisadas {len(results)} criptomoedas!")
+
+                        # BTC e ETH destacados
+                        col1, col2 = st.columns(2)
+                        btc = next((r for r in results if r['symbol'] == 'BTC-USD'), None)
+                        eth = next((r for r in results if r['symbol'] == 'ETH-USD'), None)
+
+                        with col1:
+                            if btc:
+                                st.metric(
+                                    "₿ Bitcoin",
+                                    f"${btc['price']:,.2f}",
+                                    f"{btc['change_24h']:+.2f}%"
+                                )
+
+                        with col2:
+                            if eth:
+                                st.metric(
+                                    "Ξ Ethereum",
+                                    f"${eth['price']:,.2f}",
+                                    f"{eth['change_24h']:+.2f}%"
+                                )
+
+                        st.divider()
+
+                        st.dataframe(
+                            df[['symbol', 'name', 'price', 'total_score', 'signal', 'change_24h']],
+                            use_container_width=True,
+                            column_config={
+                                'symbol': 'Simbolo',
+                                'name': 'Nome',
+                                'price': st.column_config.NumberColumn('Preco', format="$ %.2f"),
+                                'total_score': st.column_config.NumberColumn('Score', format="%.1f"),
+                                'signal': 'Sinal',
+                                'change_24h': st.column_config.NumberColumn('24h', format="%.2f%%")
+                            }
+                        )
+                    else:
+                        st.warning("Nenhum resultado encontrado.")
+        else:
+            st.warning("Scanner Crypto nao disponivel.")
+
+
+# ============================================================================
+# PAGINA DE CONFIGURACOES
+# ============================================================================
+
+def show_settings():
+    """Pagina de configuracoes."""
+    st.header("⚙️ Configuracoes")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        symbol = st.text_input("Símbolo", "PETR4.SA")
-        start_date = st.date_input("Data Inicial", datetime.now() - timedelta(days=90))
+        st.subheader("Trading")
+        st.write(f"**Capital Inicial:** R$ {config.get('trading.capital', 10000):,.2f}")
+        st.write(f"**Exposicao por Trade:** {config.get('trading.exposure', 0.03)*100:.1f}%")
+        st.write(f"**Exposicao Maxima:** {config.get('trading.max_total_exposure', 0.2)*100:.1f}%")
+
+        st.subheader("Risco")
+        st.write(f"**Stop Loss:** {config.get('risk.stop_loss', 0.02)*100:.1f}%")
+        st.write(f"**Take Profit:** {config.get('risk.take_profit', 0.05)*100:.1f}%")
+        st.write(f"**Max Drawdown:** {config.get('risk.max_drawdown', 0.1)*100:.1f}%")
 
     with col2:
-        interval = st.selectbox("Intervalo", ["1d", "1h", "5m", "15m", "30m"])
-        end_date = st.date_input("Data Final", datetime.now())
+        st.subheader("Execucao")
+        st.write(f"**Modo:** {config.get('execution.mode', 'simulation')}")
 
-    initial_capital = st.number_input("Capital Inicial (R$)", min_value=1000, value=10000, step=1000)
+        st.subheader("Mercado")
+        st.write(f"**Horario B3:** {config.get('market.open_hour', 10)}h - {config.get('market.close_hour', 18)}h")
+        st.write(f"**Verificar Feriados:** {config.get('market.check_holidays', True)}")
 
-    if st.button("🚀 Executar Backtest", use_container_width=True):
-        with st.spinner("Executando backtest..."):
-            try:
-                backtester = Backtester(
-                    symbol=symbol,
-                    start_date=start_date.strftime('%Y-%m-%d'),
-                    end_date=end_date.strftime('%Y-%m-%d'),
-                    initial_capital=initial_capital,
-                    interval=interval
-                )
+        st.subheader("Crypto")
+        st.write(f"**Habilitado:** {config.get('crypto.enabled', True)}")
+        st.write(f"**Broker:** {config.get('crypto.broker', 'simulation')}")
 
-                result = backtester.run()
-                metrics = result.calculate_metrics()
+    st.divider()
 
-                st.success("✅ Backtest concluído!")
-
-                # Mostra resultados
-                col1, col2, col3, col4 = st.columns(4)
-
-                with col1:
-                    st.metric("💰 Lucro Total", f"R$ {metrics['total_profit']:.2f}")
-                with col2:
-                    st.metric("📈 Retorno", f"{metrics['total_return_pct']:.2f}%")
-                with col3:
-                    st.metric("🎯 Win Rate", f"{metrics['win_rate']:.1f}%")
-                with col4:
-                    st.metric("📊 Trades", metrics['total_trades'])
-
-                # Métricas detalhadas
-                st.subheader("📊 Métricas Detalhadas")
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.write("**Lucro:**")
-                    st.write(f"- Lucro Médio/Trade: R$ {metrics['avg_profit_per_trade']:.2f}")
-                    st.write(f"- Maior Lucro: R$ {metrics['max_profit']:.2f}")
-                    st.write(f"- Maior Perda: R$ {metrics['max_loss']:.2f}")
-
-                with col2:
-                    st.write("**Risco:**")
-                    st.write(f"- Profit Factor: {metrics['profit_factor']:.2f}")
-                    st.write(f"- Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
-                    st.write(f"- Max Drawdown: {metrics['max_drawdown_pct']:.2f}%")
-
-            except Exception as e:
-                st.error(f"❌ Erro durante backtest: {e}")
+    st.subheader("Variaveis de Ambiente")
+    env_vars = ['BINANCE_API_KEY', 'BINANCE_SECRET_KEY', 'DATABASE_URL']
+    for var in env_vars:
+        value = os.environ.get(var)
+        status = "✅ Configurado" if value else "❌ Nao configurado"
+        st.write(f"**{var}:** {status}")
 
 
-def show_machine_learning():
-    """Interface de machine learning."""
-    st.header("🤖 Machine Learning")
+# ============================================================================
+# MAIN
+# ============================================================================
 
-    st.markdown("""
-    O módulo de ML usa Random Forest para prever sucesso de trades baseado em indicadores técnicos.
-    """)
+def main():
+    """Funcao principal."""
 
-    st.info("ℹ️ Para treinar o modelo, são necessários pelo menos 50 trades no histórico.")
+    # Sidebar
+    with st.sidebar:
+        st.image("https://img.icons8.com/fluency/96/wolf.png", width=80)
+        st.title("Lobo IA")
+        st.caption("Trading Inteligente")
 
-    # Status do modelo
-    learning = LearningModule()
+        st.divider()
 
-    col1, col2, col3 = st.columns(3)
+        page = st.radio(
+            "Navegacao",
+            [
+                "🏠 Dashboard",
+                "🔄 Transacoes",
+                "📈 Performance",
+                "🔍 Scanner",
+                "⚙️ Configuracoes"
+            ],
+            label_visibility="collapsed"
+        )
 
-    with col1:
-        status = "✅ Treinado" if learning.is_trained else "❌ Não Treinado"
-        st.metric("Status do Modelo", status)
+        st.divider()
 
-    with col2:
-        st.metric("Trades no Histórico", len(learning.history))
+        # Auto refresh
+        auto_refresh = st.checkbox("Auto Refresh (30s)", value=False)
 
-    with col3:
-        if learning.is_trained:
-            st.metric("Acurácia", "Modelo OK")
-        else:
-            st.metric("Acurácia", "N/A")
+        if st.button("🔄 Atualizar Agora", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
-    # Botão de treinamento
-    if st.button("🏋️ Treinar Modelo", use_container_width=True):
-        with st.spinner("Treinando modelo..."):
-            # Carrega histórico do banco
-            trades_df = load_trades()
+        st.divider()
 
-            if len(trades_df) < 50:
-                st.error("❌ Dados insuficientes. Necessário pelo menos 50 trades.")
-            else:
-                # Adiciona trades ao learning module
-                for _, trade in trades_df.iterrows():
-                    learning.record_trade(trade.to_dict())
+        # Status rapido
+        stats = load_performance_stats()
+        capital_inicial = config.get('trading.capital', 10000)
+        capital_atual = capital_inicial + stats.get('total_profit', 0)
 
-                # Treina
-                success = learning.train_model()
+        st.metric("💰 Saldo", f"R$ {capital_atual:,.2f}")
+        st.metric("📊 Trades", stats.get('total_trades', 0))
 
-                if success:
-                    st.success("✅ Modelo treinado com sucesso!")
+    # Paginas
+    if page == "🏠 Dashboard":
+        show_main_dashboard()
+    elif page == "🔄 Transacoes":
+        show_transactions()
+    elif page == "📈 Performance":
+        show_performance()
+    elif page == "🔍 Scanner":
+        show_market_scanner()
+    elif page == "⚙️ Configuracoes":
+        show_settings()
 
-                    # Mostra feature importance
-                    importance = learning.get_feature_importance()
-
-                    if importance:
-                        st.subheader("📊 Importância das Features")
-
-                        fig = go.Figure()
-                        fig.add_trace(go.Bar(
-                            x=list(importance.keys()),
-                            y=list(importance.values()),
-                            marker_color='lightblue'
-                        ))
-
-                        fig.update_layout(
-                            xaxis_title="Feature",
-                            yaxis_title="Importância",
-                            height=300
-                        )
-
-                        st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.error("❌ Falha ao treinar modelo.")
+    # Auto refresh
+    if auto_refresh:
+        import time
+        time.sleep(30)
+        st.cache_data.clear()
+        st.rerun()
 
 
 if __name__ == '__main__':
