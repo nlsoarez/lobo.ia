@@ -120,12 +120,12 @@ class DataCollector:
         Raises:
             ValueError: Se não retornar dados.
         """
+        # Nota: yfinance >= 0.2.28 removeu o parametro show_errors
         df = yf.download(
             self.symbol,
             period=self.period,
             interval=self.interval,
-            progress=False,
-            show_errors=False
+            progress=False
         )
 
         if df.empty:

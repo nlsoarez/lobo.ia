@@ -315,12 +315,17 @@ class PortfolioManager:
         if not self.trade_history:
             return {
                 'total_trades': 0,
+                'wins': 0,
+                'losses': 0,
                 'win_rate': 0,
                 'total_profit': 0,
                 'avg_profit': 0,
                 'max_profit': 0,
                 'max_loss': 0,
-                'profit_factor': 0
+                'profit_factor': 0,
+                'current_capital': self.current_capital,
+                'available_capital': self.available_capital,
+                'open_positions': len(self.positions)
             }
 
         wins = [t for t in self.trade_history if t['profit'] > 0]
