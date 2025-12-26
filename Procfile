@@ -5,6 +5,6 @@
 worker: python start.py
 
 # Web: Dashboard Streamlit (interface de monitoramento)
-web: streamlit run dashboard.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false
+web: python web.py
 
 # Alternativa: Rodar ambos com supervisord ou usar serviços separados no Railway
