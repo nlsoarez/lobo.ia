@@ -1,8 +1,41 @@
-# Configuração do Lobo IA - Sistema de Trading Autônomo
+# Configuracao do Lobo IA - Sistema de Trading Autonomo
 
-# Configurações de Trading
+# Configuracoes do Scanner de Mercado (NOVO!)
+scanner:
+  # Ativar scanner automatico de mercado
+  # Quando ativo, analisa todas as acoes da B3 e seleciona as melhores
+  enabled: true
+
+  # Numero de acoes top para analisar
+  top_stocks: 20
+
+  # Volume medio minimo diario (liquidez)
+  min_avg_volume: 1000000
+
+  # Faixa de preco
+  min_price: 1.0
+  max_price: 500.0
+
+  # Threads paralelas para analise
+  max_workers: 10
+
+  # Tempo de cache do scan (em minutos)
+  cache_minutes: 15
+
+  # Imprimir relatorio de mercado no inicio
+  print_report: false
+
+  # Pesos para ranking (devem somar 1.0)
+  weights:
+    signal_strength: 0.30   # Forca do sinal tecnico (RSI, MACD, BB)
+    volume_score: 0.20      # Score de volume/liquidez
+    trend_score: 0.25       # Score de tendencia (EMAs)
+    volatility_score: 0.15  # Score de volatilidade
+    momentum_score: 0.10    # Score de momentum
+
+# Configuracoes de Trading
 trading:
-  # Símbolos para negociação (sufixo .SA para B3)
+  # Simbolos fallback (usado apenas se scanner estiver desativado)
   symbols:
     - PETR4.SA
     - VALE3.SA
