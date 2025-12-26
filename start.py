@@ -340,6 +340,10 @@ class LoboSystem:
     def _open_crypto_position(self, symbol: str, quantity: float, price: float, signal_data: dict):
         """Abre uma posição de crypto."""
         now = datetime.now()
+
+        # Converte numpy types para Python nativos
+        price = float(price)
+        quantity = float(quantity)
         trade_value = quantity * price
 
         # Deduz do capital
@@ -363,14 +367,17 @@ class LoboSystem:
         system_logger.info(f"   Take-Profit: ${price * (1 + self.crypto_take_profit):.2f}")
 
         # Loga no banco de dados
+        rsi = float(signal_data.get('rsi', 0))
+        score = float(signal_data.get('total_score', 0))
+
         self.db_logger.log_trade({
             'symbol': symbol,
             'date': now,
             'action': 'BUY',
             'price': price,
             'quantity': quantity,
-            'profit': 0,
-            'indicators': f"RSI:{signal_data.get('rsi', 0):.1f}, Score:{signal_data.get('total_score', 0):.1f}",
+            'profit': 0.0,
+            'indicators': f"RSI:{rsi:.1f}, Score:{score:.1f}",
             'notes': f"Crypto BUY - {signal_data.get('signal', 'N/A')}"
         })
 
@@ -382,12 +389,14 @@ class LoboSystem:
         position = self.crypto_positions[symbol]
         now = datetime.now()
 
-        entry_price = position['entry_price']
-        quantity = position['quantity']
-        entry_value = position['trade_value']
+        # Converte numpy types para Python nativos
+        current_price = float(current_price)
+        entry_price = float(position['entry_price'])
+        quantity = float(position['quantity'])
+        entry_value = float(position['trade_value'])
         exit_value = quantity * current_price
-        profit = exit_value - entry_value
-        pnl_pct = (current_price - entry_price) / entry_price * 100
+        profit = float(exit_value - entry_value)
+        pnl_pct = float((current_price - entry_price) / entry_price * 100)
 
         # Retorna capital + lucro/prejuízo
         self.crypto_capital += exit_value
