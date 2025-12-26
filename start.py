@@ -17,6 +17,14 @@ from main import LoboTrader
 from health_server import start_health_server
 from b3_calendar import is_holiday, is_weekend, is_trading_day, get_next_trading_day
 
+# Importa crypto scanner (opcional)
+try:
+    from crypto_scanner import CryptoScanner
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
+    system_logger.warning("Crypto scanner nao disponivel")
+
 
 class MarketScheduler:
     """
@@ -127,6 +135,12 @@ class LoboSystem:
         self.running = True
         self.health_server = None
 
+        # Crypto trading 24/7
+        self.crypto_enabled = HAS_CRYPTO and config.get('crypto.enabled', True)
+        self.crypto_scanner = CryptoScanner() if self.crypto_enabled else None
+        self.crypto_interval = config.get('crypto.check_interval', 300)  # 5 minutos
+        self.last_crypto_run = None
+
         # Configura handlers para sinais de sistema
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -140,6 +154,8 @@ class LoboSystem:
                 system_logger.warning(f"Não foi possível iniciar health server: {e}")
 
         system_logger.info("Sistema Lobo IA iniciado")
+        if self.crypto_enabled:
+            system_logger.info("🪙 Crypto trading 24/7 ATIVADO")
 
     def _signal_handler(self, signum, frame):
         """
@@ -156,23 +172,27 @@ class LoboSystem:
         """
         Loop principal do sistema.
         Executa análises quando mercado está aberto.
+        Crypto opera 24/7.
         """
         system_logger.info("🚀 Iniciando loop principal...")
 
         try:
             while self.running:
-                # Verifica se mercado está aberto
+                # Verifica se mercado B3 está aberto
                 if self.scheduler.is_market_open():
                     self._execute_iteration()
                 else:
-                    self._wait_for_market()
+                    # B3 fechada - executa crypto se habilitado
+                    if self.crypto_enabled:
+                        self._execute_crypto_iteration()
+                    else:
+                        self._wait_for_market()
 
                 # Aguarda intervalo antes da próxima verificação
                 if self.running:
-                    system_logger.debug(
-                        f"Aguardando {self.scheduler.check_interval}s até próxima verificação..."
-                    )
-                    time.sleep(self.scheduler.check_interval)
+                    interval = self.scheduler.check_interval
+                    system_logger.debug(f"Aguardando {interval}s até próxima verificação...")
+                    time.sleep(interval)
 
         except Exception as e:
             system_logger.critical(
@@ -185,7 +205,7 @@ class LoboSystem:
             self._shutdown()
 
     def _execute_iteration(self):
-        """Executa uma iteração do sistema de trading."""
+        """Executa uma iteração do sistema de trading B3."""
         try:
             # Cria instância do trader se não existir
             if self.trader is None:
@@ -199,6 +219,55 @@ class LoboSystem:
                 f"Erro durante execução: {str(e)}",
                 exc_info=True
             )
+
+    def _execute_crypto_iteration(self):
+        """Executa uma iteração de análise de criptomoedas (24/7)."""
+        try:
+            now = datetime.now()
+
+            # Verifica intervalo minimo entre execuções
+            if self.last_crypto_run:
+                elapsed = (now - self.last_crypto_run).total_seconds()
+                if elapsed < self.crypto_interval:
+                    system_logger.debug(f"Crypto: aguardando {self.crypto_interval - elapsed:.0f}s")
+                    return
+
+            system_logger.info("\n" + "=" * 60)
+            system_logger.info("🪙 CRYPTO SCANNER - Mercado 24/7")
+            system_logger.info("=" * 60)
+
+            # Executa scan de criptomoedas
+            results = self.crypto_scanner.scan_crypto_market()
+
+            if results:
+                # Mostra top oportunidades
+                buy_signals = [r for r in results if 'BUY' in r.get('signal', '')]
+                sell_signals = [r for r in results if 'SELL' in r.get('signal', '')]
+
+                system_logger.info(f"\n📊 Resultados: {len(results)} criptos analisadas")
+                system_logger.info(f"   🟢 Sinais de COMPRA: {len(buy_signals)}")
+                system_logger.info(f"   🔴 Sinais de VENDA: {len(sell_signals)}")
+
+                if buy_signals:
+                    system_logger.info("\n🔥 TOP OPORTUNIDADES DE COMPRA:")
+                    for i, crypto in enumerate(buy_signals[:5], 1):
+                        system_logger.info(
+                            f"   {i}. {crypto['symbol']}: Score {crypto['total_score']:.1f} | "
+                            f"RSI {crypto.get('rsi', 0):.1f} | {crypto['signal']}"
+                        )
+
+                # TODO: Implementar execução real via Binance quando EXECUTION_MODE=live
+                mode = config.get('execution.mode', 'simulation')
+                if mode == 'simulation':
+                    system_logger.info("\n⚠️ Modo SIMULAÇÃO - Trades não executados")
+                else:
+                    system_logger.info("\n💰 Modo LIVE - Executando trades via Binance...")
+                    # Aqui entraria a lógica de execução real
+
+            self.last_crypto_run = now
+
+        except Exception as e:
+            system_logger.error(f"Erro no crypto scanner: {str(e)}", exc_info=True)
 
     def _wait_for_market(self):
         """Aguarda abertura do mercado."""
