@@ -9,12 +9,13 @@ dockerfilePath = "Dockerfile"
 # Número de réplicas
 numReplicas = 1
 
-# Comando de inicialização padrão (pode ser alterado nas variáveis)
-startCommand = "python start.py"
+# Não definir startCommand aqui - configurar no Railway Dashboard:
+# - Worker: python start.py
+# - Web: streamlit run dashboard.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
 
-# Health check
-healthcheckPath = "/health"
-healthcheckTimeout = 10
+# Health check desabilitado (Streamlit não tem endpoint /health)
+# healthcheckPath = "/health"
+healthcheckTimeout = 30
 
 # Restart policy
 restartPolicyType = "ON_FAILURE"
