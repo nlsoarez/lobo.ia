@@ -38,6 +38,12 @@ try:
 except ImportError:
     HAS_SCANNER = False
 
+try:
+    from binance_client import BinanceClient
+    HAS_BINANCE = True
+except ImportError:
+    HAS_BINANCE = False
+
 
 # Configuracao da pagina
 st.set_page_config(
@@ -110,6 +116,20 @@ def load_performance_stats():
         return stats
     except Exception as e:
         return {}
+
+
+@st.cache_data(ttl=60)
+def get_binance_balance():
+    """Obtem saldo real da Binance."""
+    if not HAS_BINANCE:
+        return None
+
+    try:
+        client = BinanceClient()
+        result = client.get_total_balance_usdt()
+        return result
+    except Exception as e:
+        return {'error': str(e)}
 
 
 def get_market_status():
@@ -199,14 +219,27 @@ def show_main_dashboard():
     capital_inicial = config.get('trading.capital', 10000)
     capital_atual = capital_inicial + stats.get('total_profit', 0)
 
+    # Saldo real da Binance
+    binance_balance = get_binance_balance()
+
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
-        st.metric(
-            "💰 Saldo Atual",
-            f"R$ {capital_atual:,.2f}",
-            f"{((capital_atual/capital_inicial)-1)*100:+.2f}%"
-        )
+        # Mostrar saldo Binance se disponivel
+        if binance_balance and binance_balance.get('success'):
+            total_usdt = binance_balance.get('total_usdt', 0)
+            testnet_label = " (Testnet)" if binance_balance.get('testnet') else ""
+            st.metric(
+                f"💰 Binance{testnet_label}",
+                f"$ {total_usdt:,.2f}",
+                f"USDT"
+            )
+        else:
+            st.metric(
+                "💰 Saldo Simulado",
+                f"R$ {capital_atual:,.2f}",
+                f"{((capital_atual/capital_inicial)-1)*100:+.2f}%"
+            )
 
     with col2:
         total_profit = stats.get('total_profit', 0)
@@ -698,6 +731,33 @@ def show_settings():
         value = os.environ.get(var)
         status = "✅ Configurado" if value else "❌ Nao configurado"
         st.write(f"**{var}:** {status}")
+
+    st.divider()
+
+    # Status da conexao Binance
+    st.subheader("💰 Conexao Binance")
+
+    binance_balance = get_binance_balance()
+
+    if binance_balance:
+        if binance_balance.get('success'):
+            testnet = binance_balance.get('testnet', True)
+            mode_text = "🟡 TESTNET" if testnet else "🟢 MAINNET (REAL)"
+            st.info(f"**Modo:** {mode_text}")
+
+            st.write(f"**Saldo Total:** $ {binance_balance.get('total_usdt', 0):,.2f} USDT")
+
+            details = binance_balance.get('details', [])
+            if details:
+                st.write("**Ativos:**")
+                for asset in details:
+                    st.write(f"  - **{asset['asset']}:** {asset['amount']:.8f} (~${asset['value_usdt']:.2f})")
+            else:
+                st.write("Nenhum ativo com saldo")
+        elif 'error' in binance_balance:
+            st.error(f"Erro na conexao: {binance_balance['error']}")
+    else:
+        st.warning("Cliente Binance nao disponivel. Verifique as API Keys.")
 
 
 # ============================================================================
