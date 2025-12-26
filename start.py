@@ -16,6 +16,7 @@ from system_logger import system_logger
 from main import LoboTrader
 from health_server import start_health_server
 from b3_calendar import is_holiday, is_weekend, is_trading_day, get_next_trading_day
+from logger import Logger
 
 # Importa crypto scanner (opcional)
 try:
@@ -141,6 +142,14 @@ class LoboSystem:
         self.crypto_interval = config.get('crypto.check_interval', 300)  # 5 minutos
         self.last_crypto_run = None
 
+        # Gerenciamento de posições crypto
+        self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time}}
+        self.crypto_capital = config.get('crypto.capital_usd', 1000.0)
+        self.crypto_exposure = config.get('crypto.exposure', 0.05)  # 5% por trade
+        self.crypto_stop_loss = config.get('risk.stop_loss', 0.02)
+        self.crypto_take_profit = config.get('risk.take_profit', 0.05)
+        self.db_logger = Logger()
+
         # Configura handlers para sinais de sistema
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -221,7 +230,7 @@ class LoboSystem:
             )
 
     def _execute_crypto_iteration(self):
-        """Executa uma iteração de análise de criptomoedas (24/7)."""
+        """Executa uma iteração de análise e trading de criptomoedas (24/7)."""
         try:
             now = datetime.now()
 
@@ -240,6 +249,12 @@ class LoboSystem:
             results = self.crypto_scanner.scan_crypto_market()
 
             if results:
+                # Cria mapa de preços atuais
+                price_map = {r['symbol']: r.get('price', 0) for r in results}
+
+                # 1. Verifica posições abertas (stop-loss / take-profit)
+                self._check_crypto_positions(price_map)
+
                 # Mostra top oportunidades
                 buy_signals = [r for r in results if 'BUY' in r.get('signal', '')]
                 sell_signals = [r for r in results if 'SELL' in r.get('signal', '')]
@@ -247,27 +262,157 @@ class LoboSystem:
                 system_logger.info(f"\n📊 Resultados: {len(results)} criptos analisadas")
                 system_logger.info(f"   🟢 Sinais de COMPRA: {len(buy_signals)}")
                 system_logger.info(f"   🔴 Sinais de VENDA: {len(sell_signals)}")
+                system_logger.info(f"   💼 Posições abertas: {len(self.crypto_positions)}")
+                system_logger.info(f"   💰 Capital disponível: ${self.crypto_capital:.2f}")
 
                 if buy_signals:
                     system_logger.info("\n🔥 TOP OPORTUNIDADES DE COMPRA:")
                     for i, crypto in enumerate(buy_signals[:5], 1):
                         system_logger.info(
                             f"   {i}. {crypto['symbol']}: Score {crypto['total_score']:.1f} | "
-                            f"RSI {crypto.get('rsi', 0):.1f} | {crypto['signal']}"
+                            f"RSI {crypto.get('rsi', 0):.1f} | ${crypto.get('price', 0):.2f} | {crypto['signal']}"
                         )
 
-                # TODO: Implementar execução real via Binance quando EXECUTION_MODE=live
-                mode = config.get('execution.mode', 'simulation')
-                if mode == 'simulation':
-                    system_logger.info("\n⚠️ Modo SIMULAÇÃO - Trades não executados")
-                else:
-                    system_logger.info("\n💰 Modo LIVE - Executando trades via Binance...")
-                    # Aqui entraria a lógica de execução real
+                # 2. Executa trades baseado em sinais
+                self._execute_crypto_trades(buy_signals, sell_signals, price_map)
 
             self.last_crypto_run = now
 
         except Exception as e:
             system_logger.error(f"Erro no crypto scanner: {str(e)}", exc_info=True)
+
+    def _check_crypto_positions(self, price_map: dict):
+        """Verifica stop-loss e take-profit das posições crypto abertas."""
+        positions_to_close = []
+
+        for symbol, position in self.crypto_positions.items():
+            current_price = price_map.get(symbol, 0)
+            if current_price <= 0:
+                continue
+
+            entry_price = position['entry_price']
+            pnl_pct = (current_price - entry_price) / entry_price
+
+            # Stop-loss
+            if pnl_pct <= -self.crypto_stop_loss:
+                positions_to_close.append((symbol, 'STOP_LOSS', current_price, pnl_pct))
+            # Take-profit
+            elif pnl_pct >= self.crypto_take_profit:
+                positions_to_close.append((symbol, 'TAKE_PROFIT', current_price, pnl_pct))
+
+        # Fecha posições
+        for symbol, reason, price, pnl_pct in positions_to_close:
+            self._close_crypto_position(symbol, price, reason)
+
+    def _execute_crypto_trades(self, buy_signals: list, sell_signals: list, price_map: dict):
+        """Executa trades de crypto baseado em sinais."""
+        mode = config.get('execution.mode', 'simulation')
+
+        # Limita número de posições abertas
+        max_positions = 3
+        if len(self.crypto_positions) >= max_positions:
+            system_logger.info(f"\n⚠️ Máximo de {max_positions} posições abertas")
+            return
+
+        # Executa compras (top 1 sinal mais forte que não temos posição)
+        for crypto in buy_signals[:1]:
+            symbol = crypto['symbol']
+
+            # Já tem posição?
+            if symbol in self.crypto_positions:
+                continue
+
+            price = crypto.get('price', 0)
+            if price <= 0:
+                continue
+
+            # Calcula quantidade baseado na exposição
+            trade_value = self.crypto_capital * self.crypto_exposure
+            quantity = trade_value / price
+
+            if trade_value > self.crypto_capital:
+                system_logger.info(f"\n⚠️ Capital insuficiente para {symbol}")
+                continue
+
+            # Executa compra
+            self._open_crypto_position(symbol, quantity, price, crypto)
+
+    def _open_crypto_position(self, symbol: str, quantity: float, price: float, signal_data: dict):
+        """Abre uma posição de crypto."""
+        now = datetime.now()
+        trade_value = quantity * price
+
+        # Deduz do capital
+        self.crypto_capital -= trade_value
+
+        # Registra posição
+        self.crypto_positions[symbol] = {
+            'quantity': quantity,
+            'entry_price': price,
+            'entry_time': now,
+            'trade_value': trade_value,
+            'stop_loss': price * (1 - self.crypto_stop_loss),
+            'take_profit': price * (1 + self.crypto_take_profit),
+        }
+
+        system_logger.info(f"\n🟢 COMPRA EXECUTADA: {symbol}")
+        system_logger.info(f"   Quantidade: {quantity:.6f}")
+        system_logger.info(f"   Preço: ${price:.2f}")
+        system_logger.info(f"   Valor: ${trade_value:.2f}")
+        system_logger.info(f"   Stop-Loss: ${price * (1 - self.crypto_stop_loss):.2f}")
+        system_logger.info(f"   Take-Profit: ${price * (1 + self.crypto_take_profit):.2f}")
+
+        # Loga no banco de dados
+        self.db_logger.log_trade({
+            'symbol': symbol,
+            'date': now,
+            'action': 'BUY',
+            'price': price,
+            'quantity': quantity,
+            'profit': 0,
+            'indicators': f"RSI:{signal_data.get('rsi', 0):.1f}, Score:{signal_data.get('total_score', 0):.1f}",
+            'notes': f"Crypto BUY - {signal_data.get('signal', 'N/A')}"
+        })
+
+    def _close_crypto_position(self, symbol: str, current_price: float, reason: str):
+        """Fecha uma posição de crypto."""
+        if symbol not in self.crypto_positions:
+            return
+
+        position = self.crypto_positions[symbol]
+        now = datetime.now()
+
+        entry_price = position['entry_price']
+        quantity = position['quantity']
+        entry_value = position['trade_value']
+        exit_value = quantity * current_price
+        profit = exit_value - entry_value
+        pnl_pct = (current_price - entry_price) / entry_price * 100
+
+        # Retorna capital + lucro/prejuízo
+        self.crypto_capital += exit_value
+
+        # Remove posição
+        del self.crypto_positions[symbol]
+
+        emoji = "🟢" if profit >= 0 else "🔴"
+        system_logger.info(f"\n{emoji} VENDA EXECUTADA: {symbol} ({reason})")
+        system_logger.info(f"   Quantidade: {quantity:.6f}")
+        system_logger.info(f"   Preço entrada: ${entry_price:.2f}")
+        system_logger.info(f"   Preço saída: ${current_price:.2f}")
+        system_logger.info(f"   Lucro/Prejuízo: ${profit:.2f} ({pnl_pct:+.2f}%)")
+
+        # Loga no banco de dados
+        self.db_logger.log_trade({
+            'symbol': symbol,
+            'date': now,
+            'action': 'SELL',
+            'price': current_price,
+            'quantity': quantity,
+            'profit': profit,
+            'indicators': f"PnL:{pnl_pct:.2f}%",
+            'notes': f"Crypto SELL - {reason} - Lucro: ${profit:.2f}"
+        })
 
     def _wait_for_market(self):
         """Aguarda abertura do mercado."""
