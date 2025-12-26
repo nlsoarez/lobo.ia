@@ -15,12 +15,13 @@ from config_loader import config
 from system_logger import system_logger
 from main import LoboTrader
 from health_server import start_health_server
+from b3_calendar import is_holiday, is_weekend, is_trading_day, get_next_trading_day
 
 
 class MarketScheduler:
     """
     Gerencia agendamento de execução baseado em horários de mercado.
-    Verifica se mercado está aberto considerando dias úteis e horários da B3.
+    Verifica se mercado está aberto considerando dias úteis, feriados e horários da B3.
     """
 
     def __init__(self):
@@ -31,20 +32,29 @@ class MarketScheduler:
         self.close_hour = market_config.get('close_hour', 18)
         self.trading_days = market_config.get('trading_days', [0, 1, 2, 3, 4])  # Seg-Sex
         self.check_interval = market_config.get('check_interval', 60)  # segundos
+        self.check_holidays = market_config.get('check_holidays', True)
 
         system_logger.info(
             f"Scheduler configurado: {self.open_hour}h-{self.close_hour}h, "
-            f"Dias: {self.trading_days}"
+            f"Dias: {self.trading_days}, Verificar feriados: {self.check_holidays}"
         )
 
     def is_market_open(self) -> bool:
         """
-        Verifica se o mercado está aberto no momento.
+        Verifica se o mercado B3 está aberto no momento.
 
         Returns:
             True se mercado está aberto.
         """
         now = datetime.now()
+
+        # Verifica fim de semana
+        if is_weekend(now):
+            return False
+
+        # Verifica feriados da B3
+        if self.check_holidays and is_holiday(now):
+            return False
 
         # Verifica dia da semana (0=segunda, 6=domingo)
         if now.weekday() not in self.trading_days:
@@ -57,10 +67,25 @@ class MarketScheduler:
         if not (self.open_hour <= current_hour < self.close_hour):
             return False
 
-        # TODO: Adicionar verificação de feriados da B3
-        # Por ora, apenas verifica dia da semana e horário
-
         return True
+
+    def get_market_status(self) -> dict:
+        """
+        Retorna status detalhado do mercado.
+
+        Returns:
+            Dicionário com informações do mercado.
+        """
+        now = datetime.now()
+        return {
+            'is_open': self.is_market_open(),
+            'is_weekend': is_weekend(now),
+            'is_holiday': is_holiday(now),
+            'is_trading_day': is_trading_day(now),
+            'current_time': now.strftime('%H:%M:%S'),
+            'current_date': now.strftime('%Y-%m-%d'),
+            'next_trading_day': get_next_trading_day(now).strftime('%Y-%m-%d'),
+        }
 
     def time_until_market_open(self) -> Optional[int]:
         """
@@ -73,31 +98,20 @@ class MarketScheduler:
             return None
 
         now = datetime.now()
-        current_weekday = now.weekday()
+        from datetime import timedelta
 
-        # Encontra próximo dia útil
-        days_ahead = 0
-        for i in range(7):
-            next_day = (current_weekday + i) % 7
-            if next_day in self.trading_days:
-                days_ahead = i
-                break
+        # Encontra proximo dia de pregao
+        next_trading = get_next_trading_day(now)
 
-        # Calcula próximo horário de abertura
-        next_open = now.replace(
-            hour=self.open_hour,
-            minute=0,
-            second=0,
-            microsecond=0
-        )
+        # Calcula proximo horario de abertura
+        next_open = datetime.combine(next_trading, dtime(self.open_hour, 0, 0))
 
-        # Se já passou da hora de abertura hoje, vai para próximo dia
-        if now.hour >= self.close_hour or days_ahead > 0:
-            from datetime import timedelta
-            next_open += timedelta(days=days_ahead if days_ahead > 0 else 1)
+        # Se hoje e dia de pregao mas ainda nao abriu
+        if is_trading_day(now) and now.hour < self.open_hour:
+            next_open = now.replace(hour=self.open_hour, minute=0, second=0, microsecond=0)
 
         seconds_until = int((next_open - now).total_seconds())
-        return seconds_until
+        return max(0, seconds_until)
 
 
 class LoboSystem:
@@ -188,14 +202,22 @@ class LoboSystem:
 
     def _wait_for_market(self):
         """Aguarda abertura do mercado."""
+        status = self.scheduler.get_market_status()
         seconds_until = self.scheduler.time_until_market_open()
 
         if seconds_until and seconds_until > 0:
             hours = seconds_until // 3600
             minutes = (seconds_until % 3600) // 60
 
+            reason = "Mercado fechado"
+            if status['is_weekend']:
+                reason = "Fim de semana"
+            elif status['is_holiday']:
+                reason = "Feriado B3"
+
             system_logger.info(
-                f"💤 Mercado fechado. Próxima abertura em {hours}h {minutes}min"
+                f"{reason}. Proximo pregao: {status['next_trading_day']} "
+                f"(em {hours}h {minutes}min)"
             )
 
     def _shutdown(self):

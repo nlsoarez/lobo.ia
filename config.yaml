@@ -176,7 +176,58 @@ execution:
   # Delay de execução simulada (em segundos)
   execution_delay: 1
 
-# Configurações de Notificação (futuro)
+# Configuracoes de Criptomoedas (24/7)
+crypto:
+  # Ativar analise de criptomoedas
+  enabled: true
+
+  # Operar crypto quando B3 esta fechada
+  trade_when_b3_closed: true
+
+  # Criptos principais a monitorar
+  symbols:
+    - BTC-USD
+    - ETH-USD
+    - SOL-USD
+    - BNB-USD
+    - XRP-USD
+
+  # Numero de criptos top para analisar
+  top_coins: 10
+
+  # Intervalo de analise (1h recomendado para crypto)
+  interval: "1h"
+  period: "7d"
+
+  # Cache em minutos
+  cache_minutes: 5
+
+  # Capital separado para crypto (em USD)
+  capital_usd: 1000.0
+
+  # Exposicao por trade
+  exposure: 0.05  # 5%
+
+  # Corretora de crypto
+  broker: "binance"  # binance, mercadobitcoin, foxbit
+
+# Configuracoes de Corretoras
+brokers:
+  # B3 - Acoes brasileiras
+  b3:
+    provider: "simulation"  # simulation, metatrader5, xp, clear
+    # mt5_login: ""
+    # mt5_password: ""
+    # mt5_server: ""
+
+  # Crypto
+  crypto:
+    provider: "simulation"  # simulation, binance, mercadobitcoin
+    # api_key: ""
+    # api_secret: ""
+    # testnet: true
+
+# Configuracoes de Notificacao
 notifications:
   enabled: false
   email: ""
