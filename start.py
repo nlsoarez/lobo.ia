@@ -1,8 +1,10 @@
 """
 Inicializador do Lobo IA - Executa o sistema em loop contínuo.
 Verifica horário de mercado e executa análises periodicamente.
+Otimizado para Railway e ambientes cloud.
 """
 
+import os
 import time
 import signal
 import sys
@@ -12,6 +14,7 @@ from typing import Optional
 from config_loader import config
 from system_logger import system_logger
 from main import LoboTrader
+from health_server import start_health_server
 
 
 class MarketScheduler:
@@ -100,6 +103,7 @@ class MarketScheduler:
 class LoboSystem:
     """
     Sistema principal que gerencia execução contínua do Lobo IA.
+    Otimizado para Railway com health check integrado.
     """
 
     def __init__(self):
@@ -107,12 +111,21 @@ class LoboSystem:
         self.scheduler = MarketScheduler()
         self.trader: Optional[LoboTrader] = None
         self.running = True
+        self.health_server = None
 
         # Configura handlers para sinais de sistema
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        system_logger.info("🐺 Sistema Lobo IA iniciado")
+        # Inicia health server para Railway
+        if os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('ENABLE_HEALTH_SERVER'):
+            try:
+                self.health_server = start_health_server()
+                system_logger.info(f"Health server iniciado na porta {self.health_server.port}")
+            except Exception as e:
+                system_logger.warning(f"Não foi possível iniciar health server: {e}")
+
+        system_logger.info("Sistema Lobo IA iniciado")
 
     def _signal_handler(self, signum, frame):
         """
@@ -188,22 +201,30 @@ class LoboSystem:
     def _shutdown(self):
         """Encerra sistema graciosamente."""
         system_logger.info("\n" + "=" * 60)
-        system_logger.info("🛑 Encerrando sistema Lobo IA")
+        system_logger.info("Encerrando sistema Lobo IA")
+
+        # Para health server se estiver rodando
+        if self.health_server:
+            try:
+                self.health_server.stop()
+                system_logger.info("Health server encerrado")
+            except Exception as e:
+                system_logger.warning(f"Erro ao encerrar health server: {e}")
 
         # Mostra estatísticas finais se trader foi inicializado
         if self.trader:
             try:
                 stats = self.trader.portfolio.get_performance_stats()
-                system_logger.info("\n📊 ESTATÍSTICAS FINAIS:")
+                system_logger.info("\nESTATISTICAS FINAIS:")
                 system_logger.info(f"  Capital final: R$ {stats['current_capital']:.2f}")
-                system_logger.info(f"  Lucro/Prejuízo: R$ {stats['total_profit']:.2f}")
+                system_logger.info(f"  Lucro/Prejuizo: R$ {stats['total_profit']:.2f}")
                 system_logger.info(f"  Total de trades: {stats['total_trades']}")
                 system_logger.info(f"  Win rate: {stats['win_rate']:.1f}%")
             except Exception as e:
                 system_logger.error(f"Erro ao obter estatísticas finais: {e}")
 
         system_logger.info("=" * 60)
-        system_logger.info("✅ Sistema encerrado com sucesso")
+        system_logger.info("Sistema encerrado com sucesso")
 
 
 def main():

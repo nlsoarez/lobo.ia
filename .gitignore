@@ -68,3 +68,14 @@ trade_history.csv
 
 # Streamlit
 .streamlit/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Docker
+.docker/
+
+# Railway
+.railway/
