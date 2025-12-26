@@ -100,8 +100,14 @@ def load_trades(limit=500):
         with Logger() as logger:
             trades = logger.get_trades(limit=limit)
         df = pd.DataFrame(trades)
-        if not df.empty and 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
+        if not df.empty:
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+            # Converte Decimal para float (PostgreSQL retorna Decimal)
+            numeric_cols = ['price', 'quantity', 'profit']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = df[col].astype(float)
         return df
     except Exception as e:
         return pd.DataFrame()
