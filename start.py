@@ -198,11 +198,16 @@ class LoboSystem:
         # Max positions (reduzido de 3 para 2)
         self.max_positions = 2
 
-        # Verifica se deve resetar posicoes (via variavel de ambiente)
-        if os.environ.get('RESET_POSITIONS', '').lower() == 'true':
-            system_logger.warning("🔄 RESET_POSITIONS=true detectado - Limpando todas as posicoes...")
+        # RESET FORÇADO - Remove após primeiro deploy bem-sucedido
+        # Para desativar, mude FORCE_RESET para False e faça redeploy
+        FORCE_RESET = True  # <<< MUDE PARA False DEPOIS DO RESET
+
+        if FORCE_RESET or os.environ.get('RESET_POSITIONS', '').lower() == 'true':
+            system_logger.warning("🔄 RESET FORÇADO - Limpando todas as posicoes e trades...")
             if self.db_logger.clear_all_positions():
                 system_logger.info("✅ Posicoes e trades de crypto limpos com sucesso!")
+                system_logger.info("✅ Capital resetado para $1000.00")
+                system_logger.info("⚠️  IMPORTANTE: Mude FORCE_RESET para False no start.py e faça redeploy!")
             else:
                 system_logger.error("❌ Erro ao limpar posicoes")
         else:
