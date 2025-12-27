@@ -9,10 +9,26 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import sys
 import time
+
+# Configura timezone do Brasil (UTC-3)
+try:
+    import pytz
+    BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
+except ImportError:
+    BRAZIL_TZ = timezone(timedelta(hours=-3))
+
+
+def get_brazil_time() -> datetime:
+    """Retorna datetime no horario de Brasilia."""
+    try:
+        return datetime.now(BRAZIL_TZ)
+    except:
+        return datetime.now(timezone(timedelta(hours=-3)))
+
 
 sys.path.insert(0, '.')
 
@@ -604,15 +620,17 @@ def get_crypto_scan():
 
 
 def get_market_status():
-    """Status dos mercados."""
-    now = datetime.now()
+    """Status dos mercados (usando horario de Brasilia)."""
+    now = get_brazil_time()
     b3_open = False
     b3_status = "Fechado"
 
     if HAS_CALENDAR:
-        if is_weekend(now):
+        # Converte para datetime naive para compatibilidade com b3_calendar
+        now_naive = now.replace(tzinfo=None) if now.tzinfo else now
+        if is_weekend(now_naive):
             b3_status = "Fim de semana"
-        elif is_holiday(now):
+        elif is_holiday(now_naive):
             b3_status = "Feriado"
         elif 10 <= now.hour < 18:
             b3_open = True
