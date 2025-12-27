@@ -14,6 +14,13 @@ import ta
 from config_loader import config
 from system_logger import system_logger
 
+# Importa CoinMarketCap client (opcional)
+try:
+    from coinmarketcap_client import CoinMarketCapClient
+    HAS_CMC = True
+except ImportError:
+    HAS_CMC = False
+
 
 # Lista de criptomoedas suportadas (Yahoo Finance usa -USD)
 # Nota: MATIC-USD, UNI-USD e APT-USD foram substituidas por nao funcionarem no Yahoo Finance
@@ -81,7 +88,14 @@ class CryptoScanner:
         self._cache_time = None
         self._cache_duration = timedelta(minutes=crypto_config.get('cache_minutes', 5))
 
+        # CoinMarketCap client (dados em tempo real mais precisos)
+        self.cmc_enabled = HAS_CMC
+        self.cmc_client = CoinMarketCapClient() if HAS_CMC else None
+        self._cmc_data = {}  # Cache de dados CMC
+
+        cmc_status = "ATIVO" if self.cmc_enabled and self.cmc_client and self.cmc_client.api_key else "DESATIVADO"
         system_logger.info(f"Crypto Scanner inicializado - {len(CRYPTOCURRENCIES)} criptomoedas disponiveis")
+        system_logger.info(f"CoinMarketCap API: {cmc_status}")
 
     def scan_crypto_market(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
@@ -101,6 +115,9 @@ class CryptoScanner:
             return self._cache.get('results', [])
 
         system_logger.info("Iniciando scan do mercado de criptomoedas...")
+
+        # Busca dados do CoinMarketCap (se disponivel)
+        self._fetch_cmc_data()
         start_time = datetime.now()
 
         results = []
@@ -145,6 +162,35 @@ class CryptoScanner:
             return False
         return datetime.now() - self._cache_time < self._cache_duration
 
+    def _fetch_cmc_data(self):
+        """Busca dados do CoinMarketCap se disponivel."""
+        if not self.cmc_enabled or not self.cmc_client or not self.cmc_client.api_key:
+            return
+
+        try:
+            # Busca cotacoes para todas as criptos
+            symbols = list(CRYPTOCURRENCIES.keys())
+            quotes = self.cmc_client.get_quotes(symbols)
+
+            if quotes:
+                self._cmc_data = quotes
+                system_logger.info(f"CMC: {len(quotes)} cotacoes carregadas")
+
+            # Busca overview do mercado
+            overview = self.cmc_client.get_market_overview()
+            if overview:
+                self._cmc_data['_market_overview'] = overview
+                sentiment = overview.get('market_sentiment', 'NEUTRAL')
+                fear_greed = overview.get('fear_greed', {})
+                if fear_greed:
+                    system_logger.info(
+                        f"CMC: Mercado {sentiment} | "
+                        f"Fear&Greed: {fear_greed.get('score', 'N/A')} ({fear_greed.get('classification', 'N/A')})"
+                    )
+
+        except Exception as e:
+            system_logger.debug(f"Erro ao buscar dados CMC: {e}")
+
     def _analyze_crypto(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
         Analisa uma criptomoeda.
@@ -165,7 +211,7 @@ class CryptoScanner:
             current_price = hist['Close'].iloc[-1]
             avg_volume = hist['Volume'].mean()
 
-            # Calcula indicadores
+            # Calcula indicadores tecnicos (Yahoo Finance)
             analysis = self._calculate_indicators(hist)
             if analysis is None:
                 return None
@@ -181,7 +227,8 @@ class CryptoScanner:
 
             crypto_info = CRYPTOCURRENCIES.get(symbol, {'name': symbol, 'category': 'other'})
 
-            return {
+            # Dados base do Yahoo Finance
+            result = {
                 'symbol': symbol,
                 'name': crypto_info['name'],
                 'category': crypto_info['category'],
@@ -194,8 +241,42 @@ class CryptoScanner:
                 **scores,
                 'total_score': total_score,
                 'signal': self._determine_signal(analysis, scores),
-                'analyzed_at': datetime.now().isoformat()
+                'analyzed_at': datetime.now().isoformat(),
+                'data_source': 'yahoo_finance',
             }
+
+            # Enriquece com dados do CoinMarketCap (se disponivel)
+            if symbol in self._cmc_data:
+                cmc = self._cmc_data[symbol]
+                result['price'] = cmc.get('price', current_price)  # Preco mais preciso
+                result['change_1h'] = cmc.get('change_1h', result['change_1h'])
+                result['change_24h'] = cmc.get('change_24h', result['change_24h'])
+                result['change_7d'] = cmc.get('change_7d', result['change_7d'])
+                result['change_30d'] = cmc.get('change_30d', 0)
+                result['market_cap'] = cmc.get('market_cap', 0)
+                result['volume_24h'] = cmc.get('volume_24h', 0)
+                result['volume_change_24h'] = cmc.get('volume_change_24h', 0)
+                result['data_source'] = 'coinmarketcap+yahoo'
+
+            # Ajusta score baseado no sentimento de mercado CMC
+            if '_market_overview' in self._cmc_data:
+                overview = self._cmc_data['_market_overview']
+                sentiment = overview.get('market_sentiment', 'NEUTRAL')
+                fear_greed = overview.get('fear_greed', {})
+
+                # Ajusta score baseado no Fear & Greed Index
+                fg_score = fear_greed.get('score', 50)
+                if fg_score < 30:  # Extreme Fear - bom para comprar
+                    total_score = min(100, total_score + 10)
+                elif fg_score > 70:  # Extreme Greed - cuidado
+                    total_score = max(0, total_score - 10)
+
+                result['total_score'] = total_score
+                result['market_sentiment'] = sentiment
+                result['fear_greed_index'] = fg_score
+                result['signal'] = self._determine_signal(analysis, scores)
+
+            return result
 
         except Exception as e:
             system_logger.debug(f"Erro ao analisar {symbol}: {e}")
@@ -388,6 +469,38 @@ class CryptoScanner:
         n = n or self.top_n
         return [r for r in results if 'BUY' in r.get('signal', '')][:n]
 
+    def get_market_overview(self) -> Dict[str, Any]:
+        """
+        Retorna visao geral do mercado crypto (CMC + analise tecnica).
+
+        Returns:
+            Dicionario com overview do mercado
+        """
+        overview = {
+            'timestamp': datetime.now().isoformat(),
+            'source': 'yahoo_finance',
+        }
+
+        # Se tiver dados CMC
+        if '_market_overview' in self._cmc_data:
+            cmc_overview = self._cmc_data['_market_overview']
+            overview['source'] = 'coinmarketcap'
+            overview['market_sentiment'] = cmc_overview.get('market_sentiment', 'NEUTRAL')
+            overview['fear_greed'] = cmc_overview.get('fear_greed', {})
+            overview['global_metrics'] = cmc_overview.get('global_metrics', {})
+
+        # Analise propria
+        results = self.scan_crypto_market()
+        buy_signals = len([r for r in results if 'BUY' in r.get('signal', '')])
+        sell_signals = len([r for r in results if r.get('signal') == 'SELL'])
+
+        overview['total_analyzed'] = len(results)
+        overview['buy_signals'] = buy_signals
+        overview['sell_signals'] = sell_signals
+        overview['technical_sentiment'] = self._get_market_sentiment(results)
+
+        return overview
+
     def print_report(self, top_n: int = 10):
         """Imprime relatório do mercado crypto."""
         results = self.scan_crypto_market()[:top_n]
@@ -395,10 +508,27 @@ class CryptoScanner:
         print("\n" + "=" * 80)
         print("CRYPTO SCANNER - MELHORES OPORTUNIDADES")
         print("=" * 80)
+
+        # Mostra dados CMC se disponiveis
+        if '_market_overview' in self._cmc_data:
+            overview = self._cmc_data['_market_overview']
+            fear_greed = overview.get('fear_greed', {})
+            global_metrics = overview.get('global_metrics', {})
+
+            if fear_greed:
+                print(f"\n{fear_greed.get('emoji', '')} Fear & Greed Index: {fear_greed.get('score', 'N/A')} ({fear_greed.get('classification', 'N/A')})")
+
+            if global_metrics:
+                total_mc = global_metrics.get('total_market_cap', 0)
+                btc_dom = global_metrics.get('btc_dominance', 0)
+                if total_mc:
+                    print(f"   Market Cap Total: ${total_mc/1e12:.2f}T | BTC Dominancia: {btc_dom:.1f}%")
+
         print(f"\n{'Rank':<5} {'Simbolo':<12} {'Nome':<15} {'Preco':<12} {'Score':<8} {'Sinal':<12} {'24h':<10}")
         print("-" * 80)
 
         for i, r in enumerate(results, 1):
+            source_icon = "🔷" if 'coinmarketcap' in r.get('data_source', '') else "📊"
             print(
                 f"{i:<5} {r['symbol']:<12} "
                 f"{r['name'][:14]:<15} "
@@ -417,6 +547,9 @@ class CryptoScanner:
             print(f"BTC: ${btc_eth['btc']['price']:,.2f} ({btc_eth['btc']['change_24h']:+.2f}%) - {btc_eth['btc']['signal']}")
         if btc_eth['eth']:
             print(f"ETH: ${btc_eth['eth']['price']:,.2f} ({btc_eth['eth']['change_24h']:+.2f}%) - {btc_eth['eth']['signal']}")
+
+        # Mostra fonte de dados
+        print(f"\nFonte de dados: {'CoinMarketCap + Yahoo Finance' if self._cmc_data else 'Yahoo Finance'}")
 
 
 # Instância global
