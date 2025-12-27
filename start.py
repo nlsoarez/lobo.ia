@@ -8,8 +8,24 @@ import os
 import time
 import signal
 import sys
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Optional
+
+# Configura timezone do Brasil (UTC-3)
+try:
+    import pytz
+    BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
+except ImportError:
+    # Fallback se pytz nao estiver disponivel
+    BRAZIL_TZ = timezone(timedelta(hours=-3))
+
+
+def get_brazil_time() -> datetime:
+    """Retorna datetime no horario de Brasilia."""
+    try:
+        return datetime.now(BRAZIL_TZ)
+    except:
+        return datetime.now(timezone(timedelta(hours=-3)))
 
 from config_loader import config
 from system_logger import system_logger
@@ -182,6 +198,9 @@ class LoboSystem:
         # Max positions (reduzido de 3 para 2)
         self.max_positions = 2
 
+        # Carrega posicoes abertas do banco (sobrevive a restarts)
+        self._load_positions_from_db()
+
         # Configura handlers para sinais de sistema
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -199,6 +218,41 @@ class LoboSystem:
             system_logger.info("🪙 Crypto trading 24/7 ATIVADO")
         if self.news_enabled:
             system_logger.info("📰 Analise de noticias ATIVADA")
+
+    def _load_positions_from_db(self):
+        """Carrega posicoes abertas do banco de dados (sobrevive a restarts)."""
+        try:
+            loaded = self.db_logger.load_positions()
+            if loaded:
+                self.crypto_positions = loaded
+                # Recalcula capital disponivel
+                total_em_posicoes = sum(p['trade_value'] for p in loaded.values())
+                self.crypto_capital = self.crypto_initial_capital - total_em_posicoes
+
+                system_logger.info(f"📂 Carregadas {len(loaded)} posicoes abertas do banco:")
+                for symbol, pos in loaded.items():
+                    system_logger.info(
+                        f"   - {symbol}: {pos['quantity']:.6f} @ ${pos['entry_price']:.2f} "
+                        f"(valor: ${pos['trade_value']:.2f})"
+                    )
+                system_logger.info(f"   Capital disponivel: ${self.crypto_capital:.2f}")
+        except Exception as e:
+            system_logger.warning(f"Erro ao carregar posicoes: {e}")
+
+    def _save_position_to_db(self, symbol: str):
+        """Salva uma posicao no banco de dados."""
+        if symbol in self.crypto_positions:
+            try:
+                self.db_logger.save_position(symbol, self.crypto_positions[symbol])
+            except Exception as e:
+                system_logger.warning(f"Erro ao salvar posicao {symbol}: {e}")
+
+    def _delete_position_from_db(self, symbol: str):
+        """Remove uma posicao do banco de dados."""
+        try:
+            self.db_logger.delete_position(symbol)
+        except Exception as e:
+            system_logger.warning(f"Erro ao deletar posicao {symbol}: {e}")
 
     def _signal_handler(self, signum, frame):
         """
@@ -366,6 +420,8 @@ class LoboSystem:
             if current_price > max_price:
                 self.crypto_positions[symbol]['max_price'] = current_price
                 max_price = current_price
+                # Persiste atualizacao no banco
+                self._save_position_to_db(symbol)
 
             # Calcula lucro maximo atingido
             max_pnl_pct = (max_price - entry_price) / entry_price
@@ -588,7 +644,7 @@ class LoboSystem:
 
     def _open_crypto_position(self, symbol: str, quantity: float, price: float, signal_data: dict):
         """Abre uma posicao de crypto com tracking para trailing stop."""
-        now = datetime.now()
+        now = get_brazil_time()
 
         # Converte numpy types para Python nativos
         price = float(price)
@@ -608,6 +664,9 @@ class LoboSystem:
             'take_profit': price * (1 + self.crypto_take_profit),
             'max_price': price,  # Para trailing stop
         }
+
+        # Persiste posicao no banco (sobrevive a restarts)
+        self._save_position_to_db(symbol)
 
         # Registra cooldown
         self.last_trade_time[symbol] = now
@@ -637,12 +696,12 @@ class LoboSystem:
         })
 
     def _close_crypto_position(self, symbol: str, current_price: float, reason: str):
-        """Fecha uma posição de crypto."""
+        """Fecha uma posicao de crypto."""
         if symbol not in self.crypto_positions:
             return
 
         position = self.crypto_positions[symbol]
-        now = datetime.now()
+        now = get_brazil_time()
 
         # Converte numpy types para Python nativos
         current_price = float(current_price)
@@ -653,18 +712,21 @@ class LoboSystem:
         profit = float(exit_value - entry_value)
         pnl_pct = float((current_price - entry_price) / entry_price * 100)
 
-        # Retorna capital + lucro/prejuízo
+        # Retorna capital + lucro/prejuizo
         self.crypto_capital += exit_value
 
-        # Remove posição
+        # Remove posicao da memoria
         del self.crypto_positions[symbol]
+
+        # Remove posicao do banco (persistencia)
+        self._delete_position_from_db(symbol)
 
         emoji = "🟢" if profit >= 0 else "🔴"
         system_logger.info(f"\n{emoji} VENDA EXECUTADA: {symbol} ({reason})")
         system_logger.info(f"   Quantidade: {quantity:.6f}")
-        system_logger.info(f"   Preço entrada: ${entry_price:.2f}")
-        system_logger.info(f"   Preço saída: ${current_price:.2f}")
-        system_logger.info(f"   Lucro/Prejuízo: ${profit:.2f} ({pnl_pct:+.2f}%)")
+        system_logger.info(f"   Preco entrada: ${entry_price:.2f}")
+        system_logger.info(f"   Preco saida: ${current_price:.2f}")
+        system_logger.info(f"   Lucro/Prejuizo: ${profit:.2f} ({pnl_pct:+.2f}%)")
 
         # Loga no banco de dados
         self.db_logger.log_trade({
