@@ -102,7 +102,7 @@ class Logger:
 
     def create_table(self):
         """
-        Cria tabela de trades se não existir.
+        Cria tabelas se não existirem.
         Compatível com SQLite e PostgreSQL.
         """
         with self.lock:
@@ -124,6 +124,21 @@ class Logger:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # Tabela para posicoes abertas (persistencia)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS crypto_positions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL UNIQUE,
+                        quantity REAL NOT NULL,
+                        entry_price REAL NOT NULL,
+                        entry_time TIMESTAMP NOT NULL,
+                        trade_value REAL NOT NULL,
+                        stop_loss REAL NOT NULL,
+                        take_profit REAL NOT NULL,
+                        max_price REAL NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             else:
                 # PostgreSQL usa SERIAL
                 cursor.execute("""
@@ -138,6 +153,21 @@ class Logger:
                         indicators TEXT,
                         notes TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Tabela para posicoes abertas (persistencia)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS crypto_positions (
+                        id SERIAL PRIMARY KEY,
+                        symbol VARCHAR(20) NOT NULL UNIQUE,
+                        quantity DECIMAL(20, 8) NOT NULL,
+                        entry_price DECIMAL(15, 4) NOT NULL,
+                        entry_time TIMESTAMP NOT NULL,
+                        trade_value DECIMAL(15, 4) NOT NULL,
+                        stop_loss DECIMAL(15, 4) NOT NULL,
+                        take_profit DECIMAL(15, 4) NOT NULL,
+                        max_price DECIMAL(15, 4) NOT NULL,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
 
@@ -363,6 +393,123 @@ class Logger:
                 'connected': False,
                 'error': str(e)
             }
+
+    def save_position(self, symbol: str, position: Dict[str, Any]) -> bool:
+        """
+        Salva ou atualiza uma posicao aberta no banco.
+
+        Args:
+            symbol: Simbolo do ativo
+            position: Dados da posicao
+
+        Returns:
+            True se salvou com sucesso
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                ph = self._get_placeholder()
+
+                if self.db_type == 'postgresql':
+                    # UPSERT para PostgreSQL
+                    cursor.execute(f"""
+                        INSERT INTO crypto_positions
+                        (symbol, quantity, entry_price, entry_time, trade_value, stop_loss, take_profit, max_price, updated_at)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, NOW())
+                        ON CONFLICT (symbol) DO UPDATE SET
+                            quantity = EXCLUDED.quantity,
+                            entry_price = EXCLUDED.entry_price,
+                            entry_time = EXCLUDED.entry_time,
+                            trade_value = EXCLUDED.trade_value,
+                            stop_loss = EXCLUDED.stop_loss,
+                            take_profit = EXCLUDED.take_profit,
+                            max_price = EXCLUDED.max_price,
+                            updated_at = NOW()
+                    """, (
+                        symbol,
+                        position['quantity'],
+                        position['entry_price'],
+                        position['entry_time'],
+                        position['trade_value'],
+                        position['stop_loss'],
+                        position['take_profit'],
+                        position.get('max_price', position['entry_price'])
+                    ))
+                else:
+                    # UPSERT para SQLite
+                    cursor.execute(f"""
+                        INSERT OR REPLACE INTO crypto_positions
+                        (symbol, quantity, entry_price, entry_time, trade_value, stop_loss, take_profit, max_price, updated_at)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, CURRENT_TIMESTAMP)
+                    """, (
+                        symbol,
+                        position['quantity'],
+                        position['entry_price'],
+                        position['entry_time'],
+                        position['trade_value'],
+                        position['stop_loss'],
+                        position['take_profit'],
+                        position.get('max_price', position['entry_price'])
+                    ))
+
+                self.conn.commit()
+                return True
+            except Exception as e:
+                print(f"Erro ao salvar posicao {symbol}: {e}")
+                return False
+
+    def load_positions(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Carrega todas as posicoes abertas do banco.
+
+        Returns:
+            Dicionario {symbol: position_data}
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT * FROM crypto_positions")
+                rows = cursor.fetchall()
+
+                positions = {}
+                for row in rows:
+                    row_dict = dict(row)
+                    symbol = row_dict['symbol']
+                    positions[symbol] = {
+                        'quantity': float(row_dict['quantity']),
+                        'entry_price': float(row_dict['entry_price']),
+                        'entry_time': row_dict['entry_time'],
+                        'trade_value': float(row_dict['trade_value']),
+                        'stop_loss': float(row_dict['stop_loss']),
+                        'take_profit': float(row_dict['take_profit']),
+                        'max_price': float(row_dict['max_price'])
+                    }
+
+                return positions
+            except Exception as e:
+                print(f"Erro ao carregar posicoes: {e}")
+                return {}
+
+    def delete_position(self, symbol: str) -> bool:
+        """
+        Remove uma posicao fechada do banco.
+
+        Args:
+            symbol: Simbolo do ativo
+
+        Returns:
+            True se removeu com sucesso
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                ph = self._get_placeholder()
+                cursor.execute(f"DELETE FROM crypto_positions WHERE symbol = {ph}", (symbol,))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                print(f"Erro ao deletar posicao {symbol}: {e}")
+                return False
 
     def close(self):
         """Fecha a conexão com o banco de dados."""
