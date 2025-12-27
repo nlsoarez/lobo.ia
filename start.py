@@ -198,8 +198,16 @@ class LoboSystem:
         # Max positions (reduzido de 3 para 2)
         self.max_positions = 2
 
-        # Carrega posicoes abertas do banco (sobrevive a restarts)
-        self._load_positions_from_db()
+        # Verifica se deve resetar posicoes (via variavel de ambiente)
+        if os.environ.get('RESET_POSITIONS', '').lower() == 'true':
+            system_logger.warning("🔄 RESET_POSITIONS=true detectado - Limpando todas as posicoes...")
+            if self.db_logger.clear_all_positions():
+                system_logger.info("✅ Posicoes e trades de crypto limpos com sucesso!")
+            else:
+                system_logger.error("❌ Erro ao limpar posicoes")
+        else:
+            # Carrega posicoes abertas do banco (sobrevive a restarts)
+            self._load_positions_from_db()
 
         # Configura handlers para sinais de sistema
         signal.signal(signal.SIGINT, self._signal_handler)

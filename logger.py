@@ -587,6 +587,30 @@ class Logger:
                 print(f"Erro ao recuperar posicoes de trades: {e}")
                 return {}
 
+    def clear_all_positions(self) -> bool:
+        """
+        Limpa todas as posicoes abertas e trades de crypto.
+        Usado para resetar o sistema.
+
+        Returns:
+            True se limpou com sucesso
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+
+                # Limpa tabela de posicoes
+                cursor.execute("DELETE FROM crypto_positions")
+
+                # Limpa trades de crypto
+                cursor.execute("DELETE FROM trades WHERE symbol LIKE '%-USD'")
+
+                self.conn.commit()
+                return True
+            except Exception as e:
+                print(f"Erro ao limpar posicoes: {e}")
+                return False
+
     def close(self):
         """Fecha a conexão com o banco de dados."""
         if self.conn:
