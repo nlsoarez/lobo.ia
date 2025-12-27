@@ -227,6 +227,15 @@ brokers:
     # api_secret: ""
     # testnet: true
 
+# Configuracoes de APIs de dados
+apis:
+  # CoinMarketCap - dados de mercado crypto em tempo real
+  coinmarketcap:
+    enabled: true
+    # API Key - configure via variavel de ambiente CMC_API_KEY
+    # Limites do plano gratuito: 10.000 creditos/mes, 30 req/min
+    # Obtenha sua key em: https://coinmarketcap.com/api/
+
 # Configuracoes de Notificacao
 notifications:
   enabled: false

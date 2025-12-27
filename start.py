@@ -26,6 +26,14 @@ except ImportError:
     HAS_CRYPTO = False
     system_logger.warning("Crypto scanner nao disponivel")
 
+# Importa analisador de noticias (opcional)
+try:
+    from news_analyzer import NewsAnalyzer
+    HAS_NEWS = True
+except ImportError:
+    HAS_NEWS = False
+    system_logger.warning("News analyzer nao disponivel")
+
 
 class MarketScheduler:
     """
@@ -142,6 +150,10 @@ class LoboSystem:
         self.crypto_interval = config.get('crypto.check_interval', 300)  # 5 minutos
         self.last_crypto_run = None
 
+        # Analisador de noticias
+        self.news_enabled = HAS_NEWS
+        self.news_analyzer = NewsAnalyzer() if self.news_enabled else None
+
         # Gerenciamento de posições crypto
         self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time}}
         self.crypto_capital = config.get('crypto.capital_usd', 1000.0)
@@ -165,6 +177,8 @@ class LoboSystem:
         system_logger.info("Sistema Lobo IA iniciado")
         if self.crypto_enabled:
             system_logger.info("🪙 Crypto trading 24/7 ATIVADO")
+        if self.news_enabled:
+            system_logger.info("📰 Analise de noticias ATIVADA")
 
     def _signal_handler(self, signum, frame):
         """
@@ -264,6 +278,7 @@ class LoboSystem:
                 system_logger.info(f"   🔴 Sinais de VENDA: {len(sell_signals)}")
                 system_logger.info(f"   💼 Posições abertas: {len(self.crypto_positions)}")
                 system_logger.info(f"   💰 Capital disponível: ${self.crypto_capital:.2f}")
+                system_logger.info(f"   📰 Analise de noticias: {'ATIVADA' if self.news_enabled else 'DESATIVADA'}")
 
                 if buy_signals:
                     system_logger.info("\n🔥 TOP OPORTUNIDADES DE COMPRA:")
@@ -304,8 +319,57 @@ class LoboSystem:
         for symbol, reason, price, pnl_pct in positions_to_close:
             self._close_crypto_position(symbol, price, reason)
 
+    def _analyze_news_for_crypto(self, symbol: str, signal_data: dict) -> dict:
+        """
+        Analisa noticias para um ativo e ajusta score.
+
+        Args:
+            symbol: Simbolo do ativo
+            signal_data: Dados do sinal técnico
+
+        Returns:
+            Dicionário com dados do sinal (possivelmente ajustado)
+        """
+        if not self.news_enabled or not self.news_analyzer:
+            return signal_data
+
+        try:
+            # Busca e analisa notícias
+            news_result = self.news_analyzer.get_news_sentiment(symbol, max_news=5)
+
+            if news_result['news_count'] == 0:
+                return signal_data
+
+            # Ajusta score baseado em notícias
+            news_score = news_result['overall_score']
+            original_score = signal_data.get('total_score', 50)
+
+            # Notícias podem ajustar score em até 15%
+            adjustment = news_score * 15  # -15% a +15%
+            new_score = original_score + adjustment
+            new_score = max(0, min(100, new_score))
+
+            # Atualiza dados do sinal
+            signal_data['total_score'] = new_score
+            signal_data['news_sentiment'] = news_result['overall_sentiment']
+            signal_data['news_score'] = news_score
+            signal_data['news_count'] = news_result['news_count']
+
+            if abs(adjustment) > 5:
+                emoji = "📈" if adjustment > 0 else "📉"
+                system_logger.info(
+                    f"   {emoji} Noticias {symbol}: {news_result['overall_sentiment']} "
+                    f"(score ajustado: {original_score:.1f} -> {new_score:.1f})"
+                )
+
+            return signal_data
+
+        except Exception as e:
+            system_logger.debug(f"Erro ao analisar noticias para {symbol}: {e}")
+            return signal_data
+
     def _execute_crypto_trades(self, buy_signals: list, sell_signals: list, price_map: dict):
-        """Executa trades de crypto baseado em sinais."""
+        """Executa trades de crypto baseado em sinais e noticias."""
         mode = config.get('execution.mode', 'simulation')
 
         # Limita número de posições abertas
@@ -313,6 +377,15 @@ class LoboSystem:
         if len(self.crypto_positions) >= max_positions:
             system_logger.info(f"\n⚠️ Máximo de {max_positions} posições abertas")
             return
+
+        # Analisa noticias para os sinais de compra
+        if self.news_enabled:
+            system_logger.info("\n📰 Analisando noticias...")
+            for crypto in buy_signals[:3]:
+                self._analyze_news_for_crypto(crypto['symbol'], crypto)
+
+            # Reordena por score atualizado (considerando noticias)
+            buy_signals.sort(key=lambda x: x.get('total_score', 0), reverse=True)
 
         # Executa compras (top 1 sinal mais forte que não temos posição)
         for crypto in buy_signals[:1]:
@@ -324,6 +397,14 @@ class LoboSystem:
 
             price = crypto.get('price', 0)
             if price <= 0:
+                continue
+
+            # Verifica se notícias são muito negativas (bloqueia compra)
+            news_sentiment = crypto.get('news_sentiment', 'neutral')
+            news_score = crypto.get('news_score', 0)
+
+            if news_sentiment == 'negative' and news_score < -0.4:
+                system_logger.info(f"\n⚠️ Compra de {symbol} bloqueada por noticias negativas")
                 continue
 
             # Calcula quantidade baseado na exposição
@@ -369,6 +450,8 @@ class LoboSystem:
         # Loga no banco de dados
         rsi = float(signal_data.get('rsi', 0))
         score = float(signal_data.get('total_score', 0))
+        news_sentiment = signal_data.get('news_sentiment', 'N/A')
+        news_score = signal_data.get('news_score', 0)
 
         self.db_logger.log_trade({
             'symbol': symbol,
@@ -377,7 +460,7 @@ class LoboSystem:
             'price': price,
             'quantity': quantity,
             'profit': 0.0,
-            'indicators': f"RSI:{rsi:.1f}, Score:{score:.1f}",
+            'indicators': f"RSI:{rsi:.1f}, Score:{score:.1f}, News:{news_sentiment}({news_score:+.2f})",
             'notes': f"Crypto BUY - {signal_data.get('signal', 'N/A')}"
         })
 
