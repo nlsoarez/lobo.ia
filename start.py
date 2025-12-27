@@ -179,35 +179,88 @@ class LoboSystem:
         self.crypto_take_profit = config.get('risk.take_profit', 0.05)
         self.db_logger = Logger()
 
-        # MELHORIAS DE TRADING v2.0
+        # =====================================================
+        # SISTEMA DE TRADING V3.0 - Filtros Inteligentes
+        # =====================================================
+
         # Trailing stop config
-        self.trailing_stop_activation = config.get('risk.trailing_stop_activation', 0.03)  # 3%
-        self.trailing_stop_distance = config.get('risk.trailing_stop_distance', 0.015)  # 1.5%
+        self.trailing_stop_activation = config.get('risk.trailing_stop_activation', 0.03)
+        self.trailing_stop_distance = config.get('risk.trailing_stop_distance', 0.015)
 
         # Max drawdown enforcement
-        self.max_drawdown = config.get('risk.max_drawdown', 0.10)  # 10%
-        self.trading_paused = False  # Pausa trading se drawdown exceder limite
+        self.max_drawdown = config.get('risk.max_drawdown', 0.10)
+        self.trading_paused = False
 
-        # Cooldown entre trades (4h = 14400 segundos)
-        self.trade_cooldown = 4 * 60 * 60  # 4 horas em segundos
+        # Cooldown ADAPTATIVO (win=2h, loss=4h)
+        self.cooldown_after_win = 2 * 60 * 60  # 2 horas
+        self.cooldown_after_loss = 4 * 60 * 60  # 4 horas
         self.last_trade_time = {}  # {symbol: datetime}
+        self.last_trade_result = {}  # {symbol: 'win' ou 'loss'}
 
-        # Volume confirmation
-        self.min_volume_ratio = 1.5  # Volume minimo 1.5x a media
-
-        # Max positions (reduzido de 3 para 2)
+        # Max positions
         self.max_positions = 2
 
-        # RESET FORÇADO - Remove após primeiro deploy bem-sucedido
-        # Para desativar, mude FORCE_RESET para False e faça redeploy
-        FORCE_RESET = True  # <<< MUDE PARA False DEPOIS DO RESET
+        # V3.0: SISTEMA DE PONTUAÇÃO DE FILTROS (substitui lógica AND)
+        # Total: 100 pontos, mínimo para entrada: 60 pontos
+        self.filter_threshold = 60  # Pontuação mínima para entrada
+        self.filter_weights = {
+            'macro_trend': 30,      # EMA50 > EMA200
+            'volume': 25,           # Volume ratio
+            'news': 20,             # Sentimento de notícias
+            'momentum': 15,         # MACD > 0
+            'volatility': 10,       # ATR adequado (1-3%)
+        }
+
+        # V3.0: NÍVEIS DE SINAL com parâmetros diferentes
+        self.signal_levels = {
+            'STRONG': {
+                'min_score': 65,
+                'min_filter_points': 70,
+                'max_rsi': 40,
+                'exposure': 0.05,       # 5%
+                'take_profit': 0.05,    # 5%
+                'stop_loss': 0.02,      # 2%
+                'trailing_activation': 0.03,
+            },
+            'MODERATE': {
+                'min_score': 55,
+                'min_filter_points': 60,
+                'max_rsi': 48,
+                'exposure': 0.035,      # 3.5%
+                'take_profit': 0.04,    # 4%
+                'stop_loss': 0.015,     # 1.5%
+                'trailing_activation': 0.025,
+            },
+            'RECOVERY': {
+                'min_score': 50,
+                'min_filter_points': 45,  # Mais flexível
+                'max_rsi': 35,            # Sobrevendido extremo
+                'exposure': 0.02,         # 2%
+                'take_profit': 0.03,      # 3%
+                'stop_loss': 0.01,        # 1%
+                'trailing_activation': None,  # Sem trailing
+            },
+        }
+
+        # V3.0: DETECÇÃO DE REGIME DE MERCADO
+        self.current_regime = 'LATERAL'  # BULL, LATERAL, BEAR
+        self.regime_adx_threshold = 25   # ADX > 25 = tendência forte
+
+        # Estatísticas de rejeição (para logging)
+        self.rejection_stats = {
+            'total_analyzed': 0,
+            'total_rejected': 0,
+            'reasons': {}
+        }
+
+        # RESET desativado - sistema normal
+        FORCE_RESET = False  # Reset já executado
 
         if FORCE_RESET or os.environ.get('RESET_POSITIONS', '').lower() == 'true':
             system_logger.warning("🔄 RESET FORÇADO - Limpando todas as posicoes e trades...")
             if self.db_logger.clear_all_positions():
                 system_logger.info("✅ Posicoes e trades de crypto limpos com sucesso!")
                 system_logger.info("✅ Capital resetado para $1000.00")
-                system_logger.info("⚠️  IMPORTANTE: Mude FORCE_RESET para False no start.py e faça redeploy!")
             else:
                 system_logger.error("❌ Erro ao limpar posicoes")
         else:
@@ -430,8 +483,8 @@ class LoboSystem:
 
     def _check_crypto_positions(self, price_map: dict):
         """
-        Verifica stop-loss, take-profit e TRAILING STOP das posicoes crypto.
-        Implementa trailing stop funcional que segue o preco.
+        V3.0: Verifica stop-loss, take-profit e TRAILING STOP das posições crypto.
+        Usa parâmetros específicos de cada posição (baseados no nível de sinal).
         """
         positions_to_close = []
 
@@ -444,41 +497,48 @@ class LoboSystem:
             max_price = position.get('max_price', entry_price)
             pnl_pct = (current_price - entry_price) / entry_price
 
-            # Atualiza preco maximo atingido (para trailing stop)
+            # V3.0: Parâmetros específicos da posição
+            stop_loss_pct = position.get('stop_loss_pct', self.crypto_stop_loss)
+            take_profit_pct = position.get('take_profit_pct', self.crypto_take_profit)
+            trailing_activation = position.get('trailing_activation', self.trailing_stop_activation)
+            signal_level = position.get('signal_level', 'N/A')
+
+            # Atualiza preço máximo atingido (para trailing stop)
             if current_price > max_price:
                 self.crypto_positions[symbol]['max_price'] = current_price
                 max_price = current_price
-                # Persiste atualizacao no banco
+                # Persiste atualização no banco
                 self._save_position_to_db(symbol)
 
-            # Calcula lucro maximo atingido
+            # Calcula lucro máximo atingido
             max_pnl_pct = (max_price - entry_price) / entry_price
 
-            # TRAILING STOP: Se lucro atingiu activation (3%), ativa trailing
-            if max_pnl_pct >= self.trailing_stop_activation:
-                # Trailing stop: fecha se preco cair X% do maximo
+            # V3.0: TRAILING STOP - Usa activation threshold do nível de sinal
+            # RECOVERY não tem trailing (trailing_activation = None)
+            if trailing_activation and max_pnl_pct >= trailing_activation:
+                # Trailing stop: fecha se preço cair X% do máximo
                 trailing_stop_price = max_price * (1 - self.trailing_stop_distance)
 
                 if current_price <= trailing_stop_price:
-                    positions_to_close.append((symbol, 'TRAILING_STOP', current_price, pnl_pct))
+                    positions_to_close.append((symbol, f'TRAILING_STOP ({signal_level})', current_price, pnl_pct))
                     system_logger.info(
-                        f"   🎯 Trailing Stop ativado em {symbol}: "
+                        f"   🎯 Trailing Stop V3.0 ativado em {symbol} [{signal_level}]: "
                         f"Max ${max_price:.2f} -> Stop ${trailing_stop_price:.2f}"
                     )
                     continue
 
-            # Stop-loss fixo
-            if pnl_pct <= -self.crypto_stop_loss:
-                positions_to_close.append((symbol, 'STOP_LOSS', current_price, pnl_pct))
-            # Take-profit fixo
-            elif pnl_pct >= self.crypto_take_profit:
-                positions_to_close.append((symbol, 'TAKE_PROFIT', current_price, pnl_pct))
+            # V3.0: Stop-loss baseado no nível
+            if pnl_pct <= -stop_loss_pct:
+                positions_to_close.append((symbol, f'STOP_LOSS ({signal_level})', current_price, pnl_pct))
+            # V3.0: Take-profit baseado no nível
+            elif pnl_pct >= take_profit_pct:
+                positions_to_close.append((symbol, f'TAKE_PROFIT ({signal_level})', current_price, pnl_pct))
 
-        # Fecha posicoes
+        # Fecha posições
         for symbol, reason, price, pnl_pct in positions_to_close:
             self._close_crypto_position(symbol, price, reason)
 
-        # Verifica max drawdown apos processar posicoes
+        # Verifica max drawdown após processar posições
         self._check_max_drawdown()
 
     def _analyze_news_for_crypto(self, symbol: str, signal_data: dict) -> dict:
@@ -530,128 +590,359 @@ class LoboSystem:
             system_logger.debug(f"Erro ao analisar noticias para {symbol}: {e}")
             return signal_data
 
-    def _check_cooldown(self, symbol: str) -> bool:
-        """
-        Verifica se o ativo esta em cooldown (4h desde ultimo trade).
+    # =========================================================
+    # V3.0: MÉTODOS DE ANÁLISE INTELIGENTE
+    # =========================================================
 
-        Args:
-            symbol: Simbolo do ativo
+    def _detect_market_regime(self, signal_data: dict) -> str:
+        """
+        V3.0: Detecta regime de mercado baseado em EMAs e força da tendência.
 
         Returns:
-            True se pode operar, False se em cooldown
+            'BULL', 'LATERAL' ou 'BEAR'
         """
-        if symbol not in self.last_trade_time:
-            return True
-
-        last_trade = self.last_trade_time[symbol]
-        elapsed = (datetime.now() - last_trade).total_seconds()
-
-        if elapsed < self.trade_cooldown:
-            remaining = (self.trade_cooldown - elapsed) / 3600  # em horas
-            system_logger.debug(f"   {symbol} em cooldown: {remaining:.1f}h restantes")
-            return False
-
-        return True
-
-    def _check_macro_trend(self, signal_data: dict) -> bool:
-        """
-        Verifica tendencia macro (EMA 50 > EMA 200 = bullish).
-
-        Args:
-            signal_data: Dados do sinal com EMAs
-
-        Returns:
-            True se tendencia favoravel, False caso contrario
-        """
+        ema_12 = signal_data.get('ema_12', 0)
+        ema_26 = signal_data.get('ema_26', 0)
         ema_50 = signal_data.get('ema_50', 0)
         ema_200 = signal_data.get('ema_200', 0)
+        atr_pct = signal_data.get('atr_pct', 2)
 
-        # Se nao tiver EMA 200, considera neutro (permite trade)
+        # Se não tiver EMA200, usa lógica simplificada
         if ema_200 == 0:
-            return True
+            if ema_12 > ema_26 > ema_50:
+                return 'BULL'
+            elif ema_12 < ema_26 < ema_50:
+                return 'BEAR'
+            return 'LATERAL'
 
-        # Tendencia de alta: EMA 50 > EMA 200
-        return ema_50 > ema_200
+        # Lógica completa com EMA200
+        # BULL: EMA12 > EMA26 > EMA50 > EMA200
+        if ema_12 > ema_26 > ema_50 and ema_50 > ema_200:
+            return 'BULL'
 
-    def _check_volume_confirmation(self, signal_data: dict) -> bool:
+        # BEAR: EMA12 < EMA26 < EMA50 < EMA200
+        if ema_12 < ema_26 < ema_50 and ema_50 < ema_200:
+            return 'BEAR'
+
+        # LATERAL: EMAs cruzadas ou próximas
+        return 'LATERAL'
+
+    def _calculate_filter_score(self, signal_data: dict) -> dict:
         """
-        Verifica se volume esta acima da media (confirmacao de movimento).
-
-        Args:
-            signal_data: Dados do sinal com volume_ratio
+        V3.0: Calcula pontuação dos filtros (0-100 pontos).
+        Substitui a lógica AND por sistema de pontos.
 
         Returns:
-            True se volume confirmado, False caso contrario
+            Dict com pontuação total e breakdown por filtro
         """
-        volume_ratio = signal_data.get('volume_ratio', 1.0)
-        return volume_ratio >= self.min_volume_ratio
+        points = 0
+        breakdown = {}
+
+        # 1. MACRO TREND (30 pontos)
+        ema_50 = signal_data.get('ema_50', 0)
+        ema_200 = signal_data.get('ema_200', 0)
+        if ema_200 > 0 and ema_50 > ema_200:
+            breakdown['macro_trend'] = 30
+            points += 30
+        elif ema_200 == 0:
+            # Sem EMA200, dá pontuação parcial se tendência curta positiva
+            ema_12 = signal_data.get('ema_12', 0)
+            ema_26 = signal_data.get('ema_26', 0)
+            if ema_12 > ema_26:
+                breakdown['macro_trend'] = 15
+                points += 15
+            else:
+                breakdown['macro_trend'] = 0
+        else:
+            breakdown['macro_trend'] = 0
+
+        # 2. VOLUME (25 pontos) - Escalonado
+        vol_ratio = signal_data.get('volume_ratio', 0)
+        if vol_ratio >= 1.5:
+            breakdown['volume'] = 25
+            points += 25
+        elif vol_ratio >= 1.2:
+            breakdown['volume'] = 20
+            points += 20
+        elif vol_ratio >= 1.0:
+            breakdown['volume'] = 15
+            points += 15
+        elif vol_ratio >= 0.8:
+            breakdown['volume'] = 10
+            points += 10
+        else:
+            breakdown['volume'] = 0
+
+        # 3. NOTÍCIAS (20 pontos)
+        news_score = signal_data.get('news_score', 0)
+        news_sentiment = signal_data.get('news_sentiment', 'neutral')
+        if news_score > 0 or news_sentiment == 'positive':
+            breakdown['news'] = 20
+            points += 20
+        elif news_score >= -0.2:
+            breakdown['news'] = 15
+            points += 15
+        elif news_score >= -0.4:
+            breakdown['news'] = 10
+            points += 10
+        else:
+            breakdown['news'] = 0
+
+        # 4. MOMENTUM (15 pontos) - MACD
+        macd = signal_data.get('macd', 0)
+        macd_hist = signal_data.get('macd_hist', 0)
+        if macd > 0 and macd_hist > 0:
+            breakdown['momentum'] = 15
+            points += 15
+        elif macd_hist > 0:
+            breakdown['momentum'] = 10
+            points += 10
+        elif macd > signal_data.get('macd_signal', 0):
+            breakdown['momentum'] = 5
+            points += 5
+        else:
+            breakdown['momentum'] = 0
+
+        # 5. VOLATILIDADE (10 pontos) - ATR entre 1-3%
+        atr_pct = signal_data.get('atr_pct', 0)
+        if 1 <= atr_pct <= 3:
+            breakdown['volatility'] = 10
+            points += 10
+        elif 0.5 <= atr_pct <= 5:
+            breakdown['volatility'] = 5
+            points += 5
+        else:
+            breakdown['volatility'] = 0
+
+        return {
+            'total_points': points,
+            'breakdown': breakdown,
+            'passed': points >= self.filter_threshold
+        }
+
+    def _determine_signal_level(self, signal_data: dict, filter_result: dict) -> dict:
+        """
+        V3.0: Determina o nível do sinal (STRONG, MODERATE, RECOVERY).
+
+        Returns:
+            Dict com nível, parâmetros e motivo se rejeitado
+        """
+        total_score = signal_data.get('total_score', 0)
+        rsi = signal_data.get('rsi', 50)
+        filter_points = filter_result['total_points']
+        regime = self._detect_market_regime(signal_data)
+
+        # Atualiza regime atual
+        self.current_regime = regime
+
+        # BEAR MARKET: Reduz exposição ou bloqueia
+        if regime == 'BEAR':
+            # Em bear market, só permite RECOVERY com RSI muito baixo
+            if rsi < 30 and filter_points >= 40:
+                level = self.signal_levels['RECOVERY'].copy()
+                level['exposure'] *= 0.5  # Reduz exposição pela metade
+                return {
+                    'level': 'RECOVERY_BEAR',
+                    'params': level,
+                    'regime': regime,
+                    'approved': True
+                }
+            return {
+                'level': None,
+                'reason': f'Bear market (regime={regime}), RSI={rsi:.1f} não sobrevendido',
+                'regime': regime,
+                'approved': False
+            }
+
+        # Tenta STRONG primeiro
+        strong = self.signal_levels['STRONG']
+        if (total_score >= strong['min_score'] and
+            rsi < strong['max_rsi'] and
+            filter_points >= strong['min_filter_points']):
+            return {
+                'level': 'STRONG',
+                'params': strong,
+                'regime': regime,
+                'approved': True
+            }
+
+        # Tenta MODERATE
+        moderate = self.signal_levels['MODERATE']
+        if (total_score >= moderate['min_score'] and
+            rsi < moderate['max_rsi'] and
+            filter_points >= moderate['min_filter_points']):
+            return {
+                'level': 'MODERATE',
+                'params': moderate,
+                'regime': regime,
+                'approved': True
+            }
+
+        # Tenta RECOVERY (para mercados laterais)
+        recovery = self.signal_levels['RECOVERY']
+        if (regime == 'LATERAL' and
+            total_score >= recovery['min_score'] and
+            rsi < recovery['max_rsi'] and
+            filter_points >= recovery['min_filter_points']):
+            return {
+                'level': 'RECOVERY',
+                'params': recovery,
+                'regime': regime,
+                'approved': True
+            }
+
+        # Nenhum nível atendido
+        reason_parts = []
+        if total_score < moderate['min_score']:
+            reason_parts.append(f"score={total_score:.1f}<{moderate['min_score']}")
+        if rsi >= moderate['max_rsi']:
+            reason_parts.append(f"RSI={rsi:.1f}>={moderate['max_rsi']}")
+        if filter_points < moderate['min_filter_points']:
+            reason_parts.append(f"filtros={filter_points}<{moderate['min_filter_points']}")
+
+        return {
+            'level': None,
+            'reason': ', '.join(reason_parts) if reason_parts else 'Critérios não atendidos',
+            'regime': regime,
+            'approved': False
+        }
+
+    def _check_adaptive_cooldown(self, symbol: str) -> tuple:
+        """
+        V3.0: Cooldown adaptativo - 2h após win, 4h após loss.
+
+        Returns:
+            (pode_operar: bool, motivo: str)
+        """
+        if symbol not in self.last_trade_time:
+            return True, None
+
+        last_trade = self.last_trade_time[symbol]
+        last_result = self.last_trade_result.get(symbol, 'loss')
+
+        # Define cooldown baseado no resultado
+        cooldown = self.cooldown_after_win if last_result == 'win' else self.cooldown_after_loss
+
+        elapsed = (get_brazil_time().replace(tzinfo=None) - last_trade.replace(tzinfo=None)
+                   if hasattr(last_trade, 'tzinfo') and last_trade.tzinfo
+                   else (datetime.now() - last_trade)).total_seconds()
+
+        if elapsed < cooldown:
+            remaining = (cooldown - elapsed) / 3600
+            return False, f"cooldown {remaining:.1f}h (após {'win' if last_result == 'win' else 'loss'})"
+
+        return True, None
+
+    def _log_rejection(self, symbol: str, reason: str, signal_data: dict, filter_result: dict):
+        """
+        V3.0: Logging detalhado de rejeições para análise.
+        """
+        self.rejection_stats['total_rejected'] += 1
+        if reason not in self.rejection_stats['reasons']:
+            self.rejection_stats['reasons'][reason] = 0
+        self.rejection_stats['reasons'][reason] += 1
+
+        # Log detalhado
+        system_logger.info(
+            f"   ❌ {symbol} | Score:{signal_data.get('total_score', 0):.1f} | "
+            f"Filtros:{filter_result['total_points']}pts | "
+            f"RSI:{signal_data.get('rsi', 0):.1f} | "
+            f"Vol:{signal_data.get('volume_ratio', 0):.1f}x | "
+            f"Regime:{self.current_regime} | "
+            f"Motivo: {reason}"
+        )
 
     def _execute_crypto_trades(self, buy_signals: list, sell_signals: list, price_map: dict):
         """
-        Executa trades de crypto com MELHORIAS v2.0:
-        - Max Drawdown check
-        - Cooldown de 4h por ativo
-        - Volume confirmation (1.5x)
-        - Macro trend filter (EMA 50/200)
-        - Max 2 posicoes
+        V3.0: Executa trades de crypto com SISTEMA DE PONTUAÇÃO:
+        - Filter scoring (0-100 pontos, mínimo 60)
+        - Signal levels (STRONG/MODERATE/RECOVERY) com parâmetros diferentes
+        - Market regime detection (BULL/LATERAL/BEAR)
+        - Adaptive cooldown (2h win, 4h loss)
+        - Detailed rejection logging
         """
         mode = config.get('execution.mode', 'simulation')
 
-        # MELHORIA: Verifica se trading esta pausado por drawdown
+        # V3.0: Verifica se trading está pausado por drawdown
         if self.trading_paused:
             system_logger.warning("\n⚠️ Trading PAUSADO - Max Drawdown atingido")
             return
 
-        # MELHORIA: Max positions reduzido de 3 para 2
+        # V3.0: Max positions
         if len(self.crypto_positions) >= self.max_positions:
-            system_logger.info(f"\n⚠️ Maximo de {self.max_positions} posicoes abertas")
+            system_logger.info(f"\n⚠️ Máximo de {self.max_positions} posições abertas")
             return
 
-        # Analisa noticias para os sinais de compra
+        # Analisa notícias para os sinais de compra
         if self.news_enabled:
-            system_logger.info("\n📰 Analisando noticias...")
-            for crypto in buy_signals[:3]:
+            system_logger.info("\n📰 Analisando notícias...")
+            for crypto in buy_signals[:5]:
                 self._analyze_news_for_crypto(crypto['symbol'], crypto)
 
-            # Reordena por score atualizado (considerando noticias)
+            # Reordena por score atualizado (considerando notícias)
             buy_signals.sort(key=lambda x: x.get('total_score', 0), reverse=True)
 
-        # Filtra sinais que passam em todos os criterios
+        # V3.0: Estatísticas de análise
+        self.rejection_stats['total_analyzed'] += len(buy_signals)
+
+        system_logger.info(f"\n🔍 V3.0 ANÁLISE DE SINAIS ({len(buy_signals)} candidatos)")
+        system_logger.info(f"   Regime atual: {self.current_regime}")
+
+        # V3.0: Avalia cada sinal com sistema de pontuação
         qualified_signals = []
         for crypto in buy_signals:
             symbol = crypto['symbol']
-            reasons_blocked = []
 
-            # Ja tem posicao?
+            # Já tem posição?
             if symbol in self.crypto_positions:
                 continue
 
-            # MELHORIA: Cooldown de 4h
-            if not self._check_cooldown(symbol):
-                reasons_blocked.append("cooldown")
+            # V3.0: Cooldown ADAPTATIVO (2h win, 4h loss)
+            can_trade, cooldown_reason = self._check_adaptive_cooldown(symbol)
+            if not can_trade:
+                self._log_rejection(symbol, cooldown_reason, crypto,
+                                   {'total_points': 0, 'breakdown': {}})
                 continue
 
-            # MELHORIA: Volume confirmation
-            if not self._check_volume_confirmation(crypto):
-                reasons_blocked.append(f"volume baixo ({crypto.get('volume_ratio', 0):.1f}x < {self.min_volume_ratio}x)")
+            # V3.0: Calcula pontuação dos filtros
+            filter_result = self._calculate_filter_score(crypto)
 
-            # MELHORIA: Macro trend filter
-            if not self._check_macro_trend(crypto):
-                reasons_blocked.append("tendencia macro negativa (EMA50 < EMA200)")
+            # V3.0: Determina nível do sinal
+            signal_level = self._determine_signal_level(crypto, filter_result)
 
-            # Noticias muito negativas
-            news_sentiment = crypto.get('news_sentiment', 'neutral')
-            news_score = crypto.get('news_score', 0)
-            if news_sentiment == 'negative' and news_score < -0.4:
-                reasons_blocked.append("noticias negativas")
-
-            if reasons_blocked:
-                system_logger.info(f"   ⚠️ {symbol} bloqueado: {', '.join(reasons_blocked)}")
+            if not signal_level['approved']:
+                self._log_rejection(symbol, signal_level.get('reason', 'Não qualificado'),
+                                   crypto, filter_result)
                 continue
+
+            # V3.0: Sinal aprovado! Adiciona com parâmetros do nível
+            crypto['_signal_level'] = signal_level['level']
+            crypto['_level_params'] = signal_level['params']
+            crypto['_filter_score'] = filter_result['total_points']
+            crypto['_regime'] = signal_level['regime']
 
             qualified_signals.append(crypto)
 
-        # Executa compra para o melhor sinal qualificado
+            system_logger.info(
+                f"   ✅ {symbol} APROVADO | Nível: {signal_level['level']} | "
+                f"Score: {crypto.get('total_score', 0):.1f} | "
+                f"Filtros: {filter_result['total_points']}pts | "
+                f"RSI: {crypto.get('rsi', 0):.1f}"
+            )
+
+        # V3.0: Log de resumo
+        if qualified_signals:
+            system_logger.info(f"\n📊 {len(qualified_signals)} sinais qualificados de {len(buy_signals)}")
+        else:
+            system_logger.info(f"\n📊 Nenhum sinal qualificado de {len(buy_signals)} analisados")
+            # Mostra estatísticas de rejeição
+            if self.rejection_stats['reasons']:
+                top_reasons = sorted(self.rejection_stats['reasons'].items(),
+                                    key=lambda x: x[1], reverse=True)[:3]
+                system_logger.info(f"   Top motivos: {dict(top_reasons)}")
+            return
+
+        # V3.0: Executa compra para o melhor sinal qualificado
         for crypto in qualified_signals[:1]:
             symbol = crypto['symbol']
             price = crypto.get('price', 0)
@@ -659,19 +950,26 @@ class LoboSystem:
             if price <= 0:
                 continue
 
-            # Calcula quantidade baseado na exposição
-            trade_value = self.crypto_capital * self.crypto_exposure
+            # V3.0: Usa parâmetros do nível de sinal
+            level_params = crypto.get('_level_params', self.signal_levels['MODERATE'])
+            exposure = level_params['exposure']
+
+            # Calcula quantidade baseado na exposição do nível
+            trade_value = self.crypto_capital * exposure
             quantity = trade_value / price
 
             if trade_value > self.crypto_capital:
                 system_logger.info(f"\n⚠️ Capital insuficiente para {symbol}")
                 continue
 
-            # Executa compra
+            # V3.0: Executa compra com parâmetros do nível
             self._open_crypto_position(symbol, quantity, price, crypto)
 
     def _open_crypto_position(self, symbol: str, quantity: float, price: float, signal_data: dict):
-        """Abre uma posicao de crypto com tracking para trailing stop."""
+        """
+        V3.0: Abre uma posição de crypto com parâmetros do nível de sinal.
+        Cada nível (STRONG/MODERATE/RECOVERY) tem TP/SL/Trailing diferentes.
+        """
         now = get_brazil_time()
 
         # Converte numpy types para Python nativos
@@ -679,32 +977,52 @@ class LoboSystem:
         quantity = float(quantity)
         trade_value = quantity * price
 
+        # V3.0: Pega parâmetros do nível de sinal (ou usa defaults)
+        level_params = signal_data.get('_level_params', self.signal_levels['MODERATE'])
+        signal_level = signal_data.get('_signal_level', 'MODERATE')
+        filter_score = signal_data.get('_filter_score', 0)
+        regime = signal_data.get('_regime', 'LATERAL')
+
+        # V3.0: Parâmetros de TP/SL baseados no nível
+        stop_loss_pct = level_params.get('stop_loss', self.crypto_stop_loss)
+        take_profit_pct = level_params.get('take_profit', self.crypto_take_profit)
+        trailing_activation = level_params.get('trailing_activation', self.trailing_stop_activation)
+
         # Deduz do capital
         self.crypto_capital -= trade_value
 
-        # Registra posicao (inclui max_price para trailing stop)
+        # Registra posição (inclui max_price para trailing stop)
         self.crypto_positions[symbol] = {
             'quantity': quantity,
             'entry_price': price,
             'entry_time': now,
             'trade_value': trade_value,
-            'stop_loss': price * (1 - self.crypto_stop_loss),
-            'take_profit': price * (1 + self.crypto_take_profit),
+            'stop_loss': price * (1 - stop_loss_pct),
+            'take_profit': price * (1 + take_profit_pct),
+            'stop_loss_pct': stop_loss_pct,
+            'take_profit_pct': take_profit_pct,
+            'trailing_activation': trailing_activation,
             'max_price': price,  # Para trailing stop
+            'signal_level': signal_level,
+            'filter_score': filter_score,
+            'regime': regime,
         }
 
-        # Persiste posicao no banco (sobrevive a restarts)
+        # Persiste posição no banco (sobrevive a restarts)
         self._save_position_to_db(symbol)
 
-        # Registra cooldown
+        # Registra cooldown (será atualizado com win/loss no close)
         self.last_trade_time[symbol] = now
 
-        system_logger.info(f"\n🟢 COMPRA EXECUTADA: {symbol}")
+        system_logger.info(f"\n🟢 COMPRA V3.0 EXECUTADA: {symbol}")
+        system_logger.info(f"   Nível: {signal_level} | Filtros: {filter_score}pts | Regime: {regime}")
         system_logger.info(f"   Quantidade: {quantity:.6f}")
         system_logger.info(f"   Preço: ${price:.2f}")
         system_logger.info(f"   Valor: ${trade_value:.2f}")
-        system_logger.info(f"   Stop-Loss: ${price * (1 - self.crypto_stop_loss):.2f}")
-        system_logger.info(f"   Take-Profit: ${price * (1 + self.crypto_take_profit):.2f}")
+        system_logger.info(f"   Stop-Loss: ${price * (1 - stop_loss_pct):.2f} ({stop_loss_pct*100:.1f}%)")
+        system_logger.info(f"   Take-Profit: ${price * (1 + take_profit_pct):.2f} ({take_profit_pct*100:.1f}%)")
+        if trailing_activation:
+            system_logger.info(f"   Trailing Activation: {trailing_activation*100:.1f}%")
 
         # Loga no banco de dados
         rsi = float(signal_data.get('rsi', 0))
@@ -719,12 +1037,15 @@ class LoboSystem:
             'price': price,
             'quantity': quantity,
             'profit': 0.0,
-            'indicators': f"RSI:{rsi:.1f}, Score:{score:.1f}, News:{news_sentiment}({news_score:+.2f})",
-            'notes': f"Crypto BUY - {signal_data.get('signal', 'N/A')}"
+            'indicators': f"RSI:{rsi:.1f}, Score:{score:.1f}, Level:{signal_level}, Filtros:{filter_score}pts",
+            'notes': f"V3.0 {signal_level} BUY - {regime} regime - News:{news_sentiment}({news_score:+.2f})"
         })
 
     def _close_crypto_position(self, symbol: str, current_price: float, reason: str):
-        """Fecha uma posicao de crypto."""
+        """
+        V3.0: Fecha uma posição de crypto e registra resultado para cooldown adaptativo.
+        Win = cooldown 2h, Loss = cooldown 4h.
+        """
         if symbol not in self.crypto_positions:
             return
 
@@ -740,21 +1061,37 @@ class LoboSystem:
         profit = float(exit_value - entry_value)
         pnl_pct = float((current_price - entry_price) / entry_price * 100)
 
-        # Retorna capital + lucro/prejuizo
+        # V3.0: Dados extras da posição
+        signal_level = position.get('signal_level', 'N/A')
+        filter_score = position.get('filter_score', 0)
+        regime = position.get('regime', 'N/A')
+
+        # Retorna capital + lucro/prejuízo
         self.crypto_capital += exit_value
 
-        # Remove posicao da memoria
+        # Remove posição da memória
         del self.crypto_positions[symbol]
 
-        # Remove posicao do banco (persistencia)
+        # Remove posição do banco (persistência)
         self._delete_position_from_db(symbol)
 
-        emoji = "🟢" if profit >= 0 else "🔴"
-        system_logger.info(f"\n{emoji} VENDA EXECUTADA: {symbol} ({reason})")
+        # V3.0: Atualiza cooldown adaptativo baseado no resultado
+        is_win = profit >= 0
+        self.last_trade_time[symbol] = now
+        self.last_trade_result[symbol] = 'win' if is_win else 'loss'
+
+        # V3.0: Calcula próximo cooldown
+        next_cooldown = self.cooldown_after_win if is_win else self.cooldown_after_loss
+        next_cooldown_hours = next_cooldown / 3600
+
+        emoji = "🟢" if is_win else "🔴"
+        system_logger.info(f"\n{emoji} VENDA V3.0 EXECUTADA: {symbol} ({reason})")
+        system_logger.info(f"   Nível entrada: {signal_level} | Filtros: {filter_score}pts | Regime: {regime}")
         system_logger.info(f"   Quantidade: {quantity:.6f}")
-        system_logger.info(f"   Preco entrada: ${entry_price:.2f}")
-        system_logger.info(f"   Preco saida: ${current_price:.2f}")
-        system_logger.info(f"   Lucro/Prejuizo: ${profit:.2f} ({pnl_pct:+.2f}%)")
+        system_logger.info(f"   Preço entrada: ${entry_price:.2f}")
+        system_logger.info(f"   Preço saída: ${current_price:.2f}")
+        system_logger.info(f"   Lucro/Prejuízo: ${profit:.2f} ({pnl_pct:+.2f}%)")
+        system_logger.info(f"   Próximo cooldown: {next_cooldown_hours:.1f}h ({'win' if is_win else 'loss'})")
 
         # Loga no banco de dados
         self.db_logger.log_trade({
@@ -764,8 +1101,8 @@ class LoboSystem:
             'price': current_price,
             'quantity': quantity,
             'profit': profit,
-            'indicators': f"PnL:{pnl_pct:.2f}%",
-            'notes': f"Crypto SELL - {reason} - Lucro: ${profit:.2f}"
+            'indicators': f"PnL:{pnl_pct:.2f}%, Level:{signal_level}, Filtros:{filter_score}pts",
+            'notes': f"V3.0 SELL ({reason}) - {'WIN' if is_win else 'LOSS'} - ${profit:.2f} - Cooldown:{next_cooldown_hours:.1f}h"
         })
 
     def _wait_for_market(self):
