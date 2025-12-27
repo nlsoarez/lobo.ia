@@ -511,6 +511,82 @@ class Logger:
                 print(f"Erro ao deletar posicao {symbol}: {e}")
                 return False
 
+    def recover_open_positions_from_trades(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Recupera posicoes abertas analisando a tabela trades.
+        Identifica BUYs que nao tem SELL correspondente.
+
+        Returns:
+            Dicionario {symbol: position_data}
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+
+                # Busca todos os trades de crypto (simbolos com -USD)
+                cursor.execute("""
+                    SELECT symbol, action, price, quantity, date
+                    FROM trades
+                    WHERE symbol LIKE '%-USD'
+                    ORDER BY date ASC
+                """)
+                rows = cursor.fetchall()
+
+                # Rastreia posicoes por simbolo
+                positions = {}
+
+                for row in rows:
+                    row_dict = dict(row)
+                    symbol = row_dict['symbol']
+                    action = row_dict['action']
+                    price = float(row_dict['price'])
+                    quantity = float(row_dict['quantity'])
+                    date = row_dict['date']
+
+                    if action == 'BUY':
+                        # Abre ou adiciona a posicao
+                        if symbol not in positions:
+                            positions[symbol] = {
+                                'quantity': quantity,
+                                'entry_price': price,
+                                'entry_time': date,
+                                'trade_value': quantity * price,
+                                'stop_loss': price * 0.98,  # 2% stop loss
+                                'take_profit': price * 1.05,  # 5% take profit
+                                'max_price': price
+                            }
+                        else:
+                            # Adiciona a posicao existente (averaging)
+                            old = positions[symbol]
+                            new_qty = old['quantity'] + quantity
+                            new_value = old['trade_value'] + (quantity * price)
+                            new_avg_price = new_value / new_qty if new_qty > 0 else price
+                            positions[symbol] = {
+                                'quantity': new_qty,
+                                'entry_price': new_avg_price,
+                                'entry_time': old['entry_time'],  # Mantem data original
+                                'trade_value': new_value,
+                                'stop_loss': new_avg_price * 0.98,
+                                'take_profit': new_avg_price * 1.05,
+                                'max_price': max(old['max_price'], price)
+                            }
+                    elif action == 'SELL':
+                        # Fecha posicao
+                        if symbol in positions:
+                            old = positions[symbol]
+                            remaining = old['quantity'] - quantity
+                            if remaining <= 0.00001:  # Praticamente zero
+                                del positions[symbol]
+                            else:
+                                positions[symbol]['quantity'] = remaining
+                                positions[symbol]['trade_value'] = remaining * old['entry_price']
+
+                return positions
+
+            except Exception as e:
+                print(f"Erro ao recuperar posicoes de trades: {e}")
+                return {}
+
     def close(self):
         """Fecha a conexão com o banco de dados."""
         if self.conn:

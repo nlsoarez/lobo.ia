@@ -223,19 +223,34 @@ class LoboSystem:
         """Carrega posicoes abertas do banco de dados (sobrevive a restarts)."""
         try:
             loaded = self.db_logger.load_positions()
+
+            # Se nao encontrou na tabela crypto_positions, tenta recuperar dos trades
+            if not loaded:
+                system_logger.info("📂 Tabela crypto_positions vazia, tentando recuperar dos trades...")
+                loaded = self.db_logger.recover_open_positions_from_trades()
+
+                # Se encontrou posicoes, salva na tabela crypto_positions para proximo restart
+                if loaded:
+                    system_logger.info(f"📂 Recuperadas {len(loaded)} posicoes dos trades historicos")
+                    for symbol, pos in loaded.items():
+                        self.db_logger.save_position(symbol, pos)
+
             if loaded:
                 self.crypto_positions = loaded
                 # Recalcula capital disponivel
                 total_em_posicoes = sum(p['trade_value'] for p in loaded.values())
                 self.crypto_capital = self.crypto_initial_capital - total_em_posicoes
 
-                system_logger.info(f"📂 Carregadas {len(loaded)} posicoes abertas do banco:")
+                system_logger.info(f"📂 {len(loaded)} posicoes abertas carregadas:")
                 for symbol, pos in loaded.items():
                     system_logger.info(
                         f"   - {symbol}: {pos['quantity']:.6f} @ ${pos['entry_price']:.2f} "
                         f"(valor: ${pos['trade_value']:.2f})"
                     )
                 system_logger.info(f"   Capital disponivel: ${self.crypto_capital:.2f}")
+            else:
+                system_logger.info("📂 Nenhuma posicao aberta encontrada")
+
         except Exception as e:
             system_logger.warning(f"Erro ao carregar posicoes: {e}")
 
