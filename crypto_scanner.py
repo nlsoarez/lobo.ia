@@ -16,6 +16,7 @@ from system_logger import system_logger
 
 
 # Lista de criptomoedas suportadas (Yahoo Finance usa -USD)
+# Nota: MATIC-USD, UNI-USD e APT-USD foram substituidas por nao funcionarem no Yahoo Finance
 CRYPTOCURRENCIES = {
     # Principais
     'BTC-USD': {'name': 'Bitcoin', 'category': 'major'},
@@ -29,11 +30,11 @@ CRYPTOCURRENCIES = {
     'DOGE-USD': {'name': 'Dogecoin', 'category': 'top10'},
     'AVAX-USD': {'name': 'Avalanche', 'category': 'top10'},
     'DOT-USD': {'name': 'Polkadot', 'category': 'top10'},
-    'MATIC-USD': {'name': 'Polygon', 'category': 'top10'},
+    'TRX-USD': {'name': 'Tron', 'category': 'top10'},  # Substituiu MATIC
 
     # DeFi
     'LINK-USD': {'name': 'Chainlink', 'category': 'defi'},
-    'UNI-USD': {'name': 'Uniswap', 'category': 'defi'},
+    'MKR-USD': {'name': 'Maker', 'category': 'defi'},  # Substituiu UNI
     'AAVE-USD': {'name': 'Aave', 'category': 'defi'},
 
     # Layer 2
@@ -44,7 +45,7 @@ CRYPTOCURRENCIES = {
     'ATOM-USD': {'name': 'Cosmos', 'category': 'other'},
     'LTC-USD': {'name': 'Litecoin', 'category': 'other'},
     'FIL-USD': {'name': 'Filecoin', 'category': 'other'},
-    'APT-USD': {'name': 'Aptos', 'category': 'other'},
+    'XLM-USD': {'name': 'Stellar', 'category': 'other'},  # Substituiu APT
     'NEAR-USD': {'name': 'NEAR Protocol', 'category': 'other'},
 }
 
