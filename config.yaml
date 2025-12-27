@@ -197,7 +197,7 @@ crypto:
 
   # Intervalo de analise (1h recomendado para crypto)
   interval: "1h"
-  period: "7d"
+  period: "30d"  # 30d para EMA 200 funcionar corretamente
 
   # Cache em minutos
   cache_minutes: 5

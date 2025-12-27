@@ -155,12 +155,32 @@ class LoboSystem:
         self.news_analyzer = NewsAnalyzer() if self.news_enabled else None
 
         # Gerenciamento de posições crypto
-        self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time}}
+        self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time, max_price}}
         self.crypto_capital = config.get('crypto.capital_usd', 1000.0)
+        self.crypto_initial_capital = self.crypto_capital  # Para calcular drawdown
         self.crypto_exposure = config.get('crypto.exposure', 0.05)  # 5% por trade
         self.crypto_stop_loss = config.get('risk.stop_loss', 0.02)
         self.crypto_take_profit = config.get('risk.take_profit', 0.05)
         self.db_logger = Logger()
+
+        # MELHORIAS DE TRADING v2.0
+        # Trailing stop config
+        self.trailing_stop_activation = config.get('risk.trailing_stop_activation', 0.03)  # 3%
+        self.trailing_stop_distance = config.get('risk.trailing_stop_distance', 0.015)  # 1.5%
+
+        # Max drawdown enforcement
+        self.max_drawdown = config.get('risk.max_drawdown', 0.10)  # 10%
+        self.trading_paused = False  # Pausa trading se drawdown exceder limite
+
+        # Cooldown entre trades (4h = 14400 segundos)
+        self.trade_cooldown = 4 * 60 * 60  # 4 horas em segundos
+        self.last_trade_time = {}  # {symbol: datetime}
+
+        # Volume confirmation
+        self.min_volume_ratio = 1.5  # Volume minimo 1.5x a media
+
+        # Max positions (reduzido de 3 para 2)
+        self.max_positions = 2
 
         # Configura handlers para sinais de sistema
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -296,8 +316,41 @@ class LoboSystem:
         except Exception as e:
             system_logger.error(f"Erro no crypto scanner: {str(e)}", exc_info=True)
 
+    def _check_max_drawdown(self):
+        """
+        Verifica se o drawdown maximo foi excedido.
+        Pausa trading se perdeu mais de 10% do capital inicial.
+        """
+        if self.crypto_initial_capital <= 0:
+            return
+
+        # Calcula capital atual (disponivel + em posicoes)
+        total_capital = self.crypto_capital
+        for symbol, position in self.crypto_positions.items():
+            total_capital += position.get('trade_value', 0)
+
+        # Calcula drawdown
+        drawdown = (self.crypto_initial_capital - total_capital) / self.crypto_initial_capital
+
+        if drawdown >= self.max_drawdown:
+            if not self.trading_paused:
+                system_logger.warning(
+                    f"⚠️ MAX DRAWDOWN ATINGIDO! Drawdown: {drawdown*100:.1f}% "
+                    f"(limite: {self.max_drawdown*100:.1f}%)"
+                )
+                system_logger.warning("Trading PAUSADO ate drawdown reduzir")
+                self.trading_paused = True
+        else:
+            if self.trading_paused and drawdown < (self.max_drawdown * 0.8):
+                # Retoma trading se drawdown reduziu para 80% do limite
+                system_logger.info(f"✅ Drawdown reduziu para {drawdown*100:.1f}%. Trading RETOMADO.")
+                self.trading_paused = False
+
     def _check_crypto_positions(self, price_map: dict):
-        """Verifica stop-loss e take-profit das posições crypto abertas."""
+        """
+        Verifica stop-loss, take-profit e TRAILING STOP das posicoes crypto.
+        Implementa trailing stop funcional que segue o preco.
+        """
         positions_to_close = []
 
         for symbol, position in self.crypto_positions.items():
@@ -306,18 +359,43 @@ class LoboSystem:
                 continue
 
             entry_price = position['entry_price']
+            max_price = position.get('max_price', entry_price)
             pnl_pct = (current_price - entry_price) / entry_price
 
-            # Stop-loss
+            # Atualiza preco maximo atingido (para trailing stop)
+            if current_price > max_price:
+                self.crypto_positions[symbol]['max_price'] = current_price
+                max_price = current_price
+
+            # Calcula lucro maximo atingido
+            max_pnl_pct = (max_price - entry_price) / entry_price
+
+            # TRAILING STOP: Se lucro atingiu activation (3%), ativa trailing
+            if max_pnl_pct >= self.trailing_stop_activation:
+                # Trailing stop: fecha se preco cair X% do maximo
+                trailing_stop_price = max_price * (1 - self.trailing_stop_distance)
+
+                if current_price <= trailing_stop_price:
+                    positions_to_close.append((symbol, 'TRAILING_STOP', current_price, pnl_pct))
+                    system_logger.info(
+                        f"   🎯 Trailing Stop ativado em {symbol}: "
+                        f"Max ${max_price:.2f} -> Stop ${trailing_stop_price:.2f}"
+                    )
+                    continue
+
+            # Stop-loss fixo
             if pnl_pct <= -self.crypto_stop_loss:
                 positions_to_close.append((symbol, 'STOP_LOSS', current_price, pnl_pct))
-            # Take-profit
+            # Take-profit fixo
             elif pnl_pct >= self.crypto_take_profit:
                 positions_to_close.append((symbol, 'TAKE_PROFIT', current_price, pnl_pct))
 
-        # Fecha posições
+        # Fecha posicoes
         for symbol, reason, price, pnl_pct in positions_to_close:
             self._close_crypto_position(symbol, price, reason)
+
+        # Verifica max drawdown apos processar posicoes
+        self._check_max_drawdown()
 
     def _analyze_news_for_crypto(self, symbol: str, signal_data: dict) -> dict:
         """
@@ -368,14 +446,81 @@ class LoboSystem:
             system_logger.debug(f"Erro ao analisar noticias para {symbol}: {e}")
             return signal_data
 
+    def _check_cooldown(self, symbol: str) -> bool:
+        """
+        Verifica se o ativo esta em cooldown (4h desde ultimo trade).
+
+        Args:
+            symbol: Simbolo do ativo
+
+        Returns:
+            True se pode operar, False se em cooldown
+        """
+        if symbol not in self.last_trade_time:
+            return True
+
+        last_trade = self.last_trade_time[symbol]
+        elapsed = (datetime.now() - last_trade).total_seconds()
+
+        if elapsed < self.trade_cooldown:
+            remaining = (self.trade_cooldown - elapsed) / 3600  # em horas
+            system_logger.debug(f"   {symbol} em cooldown: {remaining:.1f}h restantes")
+            return False
+
+        return True
+
+    def _check_macro_trend(self, signal_data: dict) -> bool:
+        """
+        Verifica tendencia macro (EMA 50 > EMA 200 = bullish).
+
+        Args:
+            signal_data: Dados do sinal com EMAs
+
+        Returns:
+            True se tendencia favoravel, False caso contrario
+        """
+        ema_50 = signal_data.get('ema_50', 0)
+        ema_200 = signal_data.get('ema_200', 0)
+
+        # Se nao tiver EMA 200, considera neutro (permite trade)
+        if ema_200 == 0:
+            return True
+
+        # Tendencia de alta: EMA 50 > EMA 200
+        return ema_50 > ema_200
+
+    def _check_volume_confirmation(self, signal_data: dict) -> bool:
+        """
+        Verifica se volume esta acima da media (confirmacao de movimento).
+
+        Args:
+            signal_data: Dados do sinal com volume_ratio
+
+        Returns:
+            True se volume confirmado, False caso contrario
+        """
+        volume_ratio = signal_data.get('volume_ratio', 1.0)
+        return volume_ratio >= self.min_volume_ratio
+
     def _execute_crypto_trades(self, buy_signals: list, sell_signals: list, price_map: dict):
-        """Executa trades de crypto baseado em sinais e noticias."""
+        """
+        Executa trades de crypto com MELHORIAS v2.0:
+        - Max Drawdown check
+        - Cooldown de 4h por ativo
+        - Volume confirmation (1.5x)
+        - Macro trend filter (EMA 50/200)
+        - Max 2 posicoes
+        """
         mode = config.get('execution.mode', 'simulation')
 
-        # Limita número de posições abertas
-        max_positions = 3
-        if len(self.crypto_positions) >= max_positions:
-            system_logger.info(f"\n⚠️ Máximo de {max_positions} posições abertas")
+        # MELHORIA: Verifica se trading esta pausado por drawdown
+        if self.trading_paused:
+            system_logger.warning("\n⚠️ Trading PAUSADO - Max Drawdown atingido")
+            return
+
+        # MELHORIA: Max positions reduzido de 3 para 2
+        if len(self.crypto_positions) >= self.max_positions:
+            system_logger.info(f"\n⚠️ Maximo de {self.max_positions} posicoes abertas")
             return
 
         # Analisa noticias para os sinais de compra
@@ -387,24 +532,47 @@ class LoboSystem:
             # Reordena por score atualizado (considerando noticias)
             buy_signals.sort(key=lambda x: x.get('total_score', 0), reverse=True)
 
-        # Executa compras (top 1 sinal mais forte que não temos posição)
-        for crypto in buy_signals[:1]:
+        # Filtra sinais que passam em todos os criterios
+        qualified_signals = []
+        for crypto in buy_signals:
             symbol = crypto['symbol']
+            reasons_blocked = []
 
-            # Já tem posição?
+            # Ja tem posicao?
             if symbol in self.crypto_positions:
                 continue
 
-            price = crypto.get('price', 0)
-            if price <= 0:
+            # MELHORIA: Cooldown de 4h
+            if not self._check_cooldown(symbol):
+                reasons_blocked.append("cooldown")
                 continue
 
-            # Verifica se notícias são muito negativas (bloqueia compra)
+            # MELHORIA: Volume confirmation
+            if not self._check_volume_confirmation(crypto):
+                reasons_blocked.append(f"volume baixo ({crypto.get('volume_ratio', 0):.1f}x < {self.min_volume_ratio}x)")
+
+            # MELHORIA: Macro trend filter
+            if not self._check_macro_trend(crypto):
+                reasons_blocked.append("tendencia macro negativa (EMA50 < EMA200)")
+
+            # Noticias muito negativas
             news_sentiment = crypto.get('news_sentiment', 'neutral')
             news_score = crypto.get('news_score', 0)
-
             if news_sentiment == 'negative' and news_score < -0.4:
-                system_logger.info(f"\n⚠️ Compra de {symbol} bloqueada por noticias negativas")
+                reasons_blocked.append("noticias negativas")
+
+            if reasons_blocked:
+                system_logger.info(f"   ⚠️ {symbol} bloqueado: {', '.join(reasons_blocked)}")
+                continue
+
+            qualified_signals.append(crypto)
+
+        # Executa compra para o melhor sinal qualificado
+        for crypto in qualified_signals[:1]:
+            symbol = crypto['symbol']
+            price = crypto.get('price', 0)
+
+            if price <= 0:
                 continue
 
             # Calcula quantidade baseado na exposição
@@ -419,7 +587,7 @@ class LoboSystem:
             self._open_crypto_position(symbol, quantity, price, crypto)
 
     def _open_crypto_position(self, symbol: str, quantity: float, price: float, signal_data: dict):
-        """Abre uma posição de crypto."""
+        """Abre uma posicao de crypto com tracking para trailing stop."""
         now = datetime.now()
 
         # Converte numpy types para Python nativos
@@ -430,7 +598,7 @@ class LoboSystem:
         # Deduz do capital
         self.crypto_capital -= trade_value
 
-        # Registra posição
+        # Registra posicao (inclui max_price para trailing stop)
         self.crypto_positions[symbol] = {
             'quantity': quantity,
             'entry_price': price,
@@ -438,7 +606,11 @@ class LoboSystem:
             'trade_value': trade_value,
             'stop_loss': price * (1 - self.crypto_stop_loss),
             'take_profit': price * (1 + self.crypto_take_profit),
+            'max_price': price,  # Para trailing stop
         }
+
+        # Registra cooldown
+        self.last_trade_time[symbol] = now
 
         system_logger.info(f"\n🟢 COMPRA EXECUTADA: {symbol}")
         system_logger.info(f"   Quantidade: {quantity:.6f}")
