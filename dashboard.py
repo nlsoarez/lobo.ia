@@ -944,10 +944,27 @@ def render_settings():
 
     with col2:
         st.markdown("**APIs**")
-        apis = ['BINANCE_API_KEY', 'CMC_API_KEY', 'DATABASE_URL']
-        for api in apis:
-            status = "✅" if os.environ.get(api) else "❌"
-            st.write(f"{status} {api}")
+
+        # Verifica Binance (testa conexao real)
+        binance_status = "❌"
+        if os.environ.get('BINANCE_API_KEY') and os.environ.get('BINANCE_SECRET_KEY'):
+            if HAS_BINANCE:
+                try:
+                    client = BinanceClient()
+                    test = client.test_connection()
+                    if test.get('authenticated') or test.get('public_api'):
+                        binance_status = "✅"
+                except:
+                    pass
+        st.write(f"{binance_status} BINANCE_API_KEY")
+
+        # CMC API
+        cmc_status = "✅" if os.environ.get('CMC_API_KEY') else "❌"
+        st.write(f"{cmc_status} CMC_API_KEY")
+
+        # Database
+        db_status = "✅" if os.environ.get('DATABASE_URL') else "❌"
+        st.write(f"{db_status} DATABASE_URL")
 
 
 # =============================================================================

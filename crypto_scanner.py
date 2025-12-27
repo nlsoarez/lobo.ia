@@ -72,7 +72,7 @@ class CryptoScanner:
         self.top_n = crypto_config.get('top_coins', 10)
         self.max_workers = crypto_config.get('max_workers', 5)
         self.interval = crypto_config.get('interval', '1h')  # Cripto usa intervalos maiores
-        self.period = crypto_config.get('period', '7d')
+        self.period = crypto_config.get('period', '30d')  # 30d para ter dados suficientes para EMA 200
 
         # Pesos para ranking
         self.weights = crypto_config.get('weights', {
@@ -294,10 +294,11 @@ class CryptoScanner:
             rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
             current_rsi = rsi.iloc[-1]
 
-            # EMAs
+            # EMAs (incluindo EMA 200 para filtro macro trend)
             ema_12 = ta.trend.EMAIndicator(close, window=12).ema_indicator()
             ema_26 = ta.trend.EMAIndicator(close, window=26).ema_indicator()
             ema_50 = ta.trend.EMAIndicator(close, window=50).ema_indicator()
+            ema_200 = ta.trend.EMAIndicator(close, window=200).ema_indicator()
 
             # MACD
             macd = ta.trend.MACD(close)
@@ -318,11 +319,15 @@ class CryptoScanner:
             vol_sma = volume.rolling(window=20).mean()
             vol_ratio = volume.iloc[-1] / vol_sma.iloc[-1] if vol_sma.iloc[-1] > 0 else 1
 
+            # EMA 200 pode nao ter dados suficientes, usa fallback
+            ema_200_val = ema_200.iloc[-1] if len(ema_200.dropna()) > 0 else 0
+
             return {
                 'rsi': current_rsi,
                 'ema_12': ema_12.iloc[-1],
                 'ema_26': ema_26.iloc[-1],
                 'ema_50': ema_50.iloc[-1] if len(ema_50.dropna()) > 0 else ema_26.iloc[-1],
+                'ema_200': ema_200_val,  # Para filtro macro trend
                 'macd': macd_line.iloc[-1],
                 'macd_signal': macd_signal.iloc[-1],
                 'macd_hist': macd_hist.iloc[-1],
