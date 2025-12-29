@@ -63,6 +63,19 @@ except ImportError as e:
     HAS_PHASE2 = False
     system_logger.warning(f"Phase 2 módulos não disponíveis: {e}")
 
+# V4.0 Phase 3: Importa módulos de rotação agressiva
+try:
+    from aggressive_rotation_manager import AggressiveRotationManager
+    from intraday_ranking_system import IntradayRankingSystem
+    from dynamic_allocation_manager import DynamicAllocationManager
+    from realtime_performance_monitor import RealtimePerformanceMonitor
+    from rotation_decision_engine import RotationDecisionEngine
+    HAS_PHASE3 = True
+    system_logger.info("V4.0 Phase 3 módulos carregados")
+except ImportError as e:
+    HAS_PHASE3 = False
+    system_logger.warning(f"Phase 3 módulos não disponíveis: {e}")
+
 
 class MarketScheduler:
     """
@@ -198,6 +211,22 @@ class LoboSystem:
             self.volume_analyzer = None
             self.timing_manager = None
             self.breakout_detector = None
+
+        # V4.0 Phase 3: Sistema de rotação agressiva
+        self.phase3_enabled = HAS_PHASE3
+        if self.phase3_enabled:
+            self.rotation_manager = AggressiveRotationManager()
+            self.intraday_ranking = IntradayRankingSystem()
+            self.allocation_manager = DynamicAllocationManager(total_capital=self.crypto_initial_capital)
+            self.performance_monitor = RealtimePerformanceMonitor()
+            self.decision_engine = RotationDecisionEngine()
+            system_logger.info("V4.0 Phase 3: Sistema de rotação agressiva ATIVO")
+        else:
+            self.rotation_manager = None
+            self.intraday_ranking = None
+            self.allocation_manager = None
+            self.performance_monitor = None
+            self.decision_engine = None
 
         # Gerenciamento de posições crypto
         self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time, max_price}}
@@ -850,6 +879,136 @@ class LoboSystem:
         except Exception as e:
             system_logger.debug(f"Erro obtendo df para {symbol}: {e}")
             return None
+
+    def _apply_phase3_rotation(self, buy_signals: list, price_map: dict) -> bool:
+        """
+        V4.0 Phase 3: Aplica sistema de rotação agressiva.
+        Analisa posições atuais e candidatos para rotação otimizada.
+        Returns: True se rotação foi executada.
+        """
+        if not self.phase3_enabled or not self.rotation_manager:
+            return False
+
+        try:
+            # Atualiza capital no allocation manager
+            if self.allocation_manager:
+                positions_value = sum(p.get('trade_value', 0) for p in self.crypto_positions.values())
+                self.allocation_manager.update_capital(self.crypto_capital, positions_value)
+
+            # Atualiza métricas de performance de cada posição
+            if self.performance_monitor and self.crypto_positions:
+                for symbol, position in self.crypto_positions.items():
+                    current_price = price_map.get(symbol, 0)
+                    if current_price > 0:
+                        self.performance_monitor.update_position(
+                            symbol, position, current_price,
+                            current_volume=0  # Volume seria atualizado se disponível
+                        )
+
+                # Log posições com baixa performance
+                underperforming = self.performance_monitor.get_underperforming_positions(threshold=30)
+                if underperforming:
+                    system_logger.info(f"\n⚠️ PHASE 3: {len(underperforming)} posições com baixa performance:")
+                    for pos in underperforming[:3]:
+                        system_logger.info(f"   - {pos.symbol}: Score={pos.performance_score:.0f}, "
+                                          f"P&L={pos.pnl_percent:.2f}%, Rec={pos.recommendation}")
+
+            # Verifica se pode rotacionar
+            if not self.rotation_manager.can_rotate():
+                system_logger.debug("Phase 3: Rotação não disponível (limite ou cooldown)")
+                return False
+
+            # Ranking das posições atuais
+            if self.intraday_ranking and self.crypto_positions:
+                ranked_positions = self.intraday_ranking.rank_current_positions(
+                    self.crypto_positions, price_map
+                )
+
+                # Ranking dos candidatos
+                ranked_candidates = self.intraday_ranking.rank_candidate_signals(
+                    buy_signals, self.crypto_positions, max_candidates=10
+                )
+
+                if ranked_positions and ranked_candidates:
+                    # Encontra oportunidades de rotação
+                    rotation_opportunities = self.intraday_ranking.get_rotation_candidates(
+                        self.crypto_positions, buy_signals, price_map,
+                        min_improvement=15.0
+                    )
+
+                    if rotation_opportunities:
+                        system_logger.info(f"\n🔄 PHASE 3 ROTATION: {len(rotation_opportunities)} oportunidades")
+
+                        # Usa decision engine para melhor decisão
+                        if self.decision_engine:
+                            best_rotation = rotation_opportunities[0]
+                            exit_symbol = best_rotation['exit_symbol']
+                            candidate = best_rotation['candidate']
+
+                            position = self.crypto_positions.get(exit_symbol)
+                            current_price = price_map.get(exit_symbol, 0)
+
+                            if position and current_price > 0:
+                                decision = self.decision_engine.evaluate_rotation_scenario(
+                                    position, candidate, current_price
+                                )
+
+                                self.decision_engine.log_decision(decision)
+
+                                if decision.should_rotate:
+                                    # Executa rotação
+                                    system_logger.info(
+                                        f"🔄 EXECUTANDO ROTAÇÃO: {exit_symbol} → {candidate['symbol']}"
+                                    )
+
+                                    # Fecha posição atual
+                                    self._close_crypto_position(
+                                        exit_symbol, current_price,
+                                        f"PHASE3_ROTATION ({decision.scenario.value})"
+                                    )
+
+                                    # Registra no rotation manager
+                                    self.rotation_manager.rotation_count_today += 1
+                                    self.rotation_manager.rotation_count_hour += 1
+                                    self.rotation_manager.last_rotation_time = datetime.now()
+
+                                    return True  # Rotação executada
+
+            return False
+
+        except Exception as e:
+            system_logger.warning(f"Erro Phase 3 rotation: {e}")
+            return False
+
+    def _get_phase3_allocation(self, signal: dict) -> float:
+        """
+        V4.0 Phase 3: Calcula alocação usando Kelly Criterion.
+        Returns: Percentual do capital a alocar (0.0 - 0.25).
+        """
+        if not self.phase3_enabled or not self.allocation_manager:
+            # Fallback para alocação padrão
+            return signal.get('phase2_exposure', 0.15)
+
+        try:
+            score = signal.get('phase2_score', 0) or signal.get('total_score', 50)
+            volatility = signal.get('volatility', 1.0)
+            take_profit = signal.get('phase2_tp', 0.02)
+            stop_loss = signal.get('phase2_sl', 0.01)
+
+            allocation = self.allocation_manager.calculate_position_size(
+                signal['symbol'], score, volatility, take_profit, stop_loss
+            )
+
+            system_logger.info(
+                f"   📊 Kelly Allocation: {allocation.final_position_size:.2f} "
+                f"({allocation.kelly_fraction*100:.1f}% Kelly, {allocation.reason})"
+            )
+
+            return allocation.adjusted_allocation
+
+        except Exception as e:
+            system_logger.debug(f"Erro Kelly allocation: {e}")
+            return 0.15
 
     def _log_positions_dashboard(self, price_map: dict):
         """
@@ -1654,7 +1813,13 @@ class LoboSystem:
                 for reason, count in top_reasons:
                     system_logger.info(f"      • {reason}: {count}x")
 
-        # V3.1: Se posições cheias, tenta rotação
+        # V4.0 Phase 3: Tenta rotação inteligente PRIMEIRO
+        if positions_full and qualified_signals and self.phase3_enabled:
+            if self._apply_phase3_rotation(qualified_signals, price_map):
+                positions_full = False  # Rotação abriu espaço
+                system_logger.info("✅ Phase 3 rotation executada com sucesso")
+
+        # V3.1: Se posições cheias, tenta rotação legacy
         if positions_full and qualified_signals:
             best_signal = qualified_signals[0]
             if self._try_position_rotation(best_signal, price_map):
@@ -1676,11 +1841,15 @@ class LoboSystem:
             if price <= 0:
                 continue
 
-            # V3.1: Usa parâmetros do nível de sinal
-            level_params = crypto.get('_level_params', self.signal_levels['MODERATE'])
-            exposure = level_params['exposure']
+            # V4.0 Phase 3: Usa Kelly allocation se disponível
+            if self.phase3_enabled:
+                exposure = self._get_phase3_allocation(crypto)
+            else:
+                # V3.1: Usa parâmetros do nível de sinal
+                level_params = crypto.get('_level_params', self.signal_levels['MODERATE'])
+                exposure = level_params['exposure']
 
-            # Calcula quantidade baseado na exposição do nível
+            # Calcula quantidade baseado na exposição
             trade_value = self.crypto_capital * exposure
             quantity = trade_value / price
 
