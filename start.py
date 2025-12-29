@@ -180,108 +180,142 @@ class LoboSystem:
         self.db_logger = Logger()
 
         # =====================================================
-        # SISTEMA DE TRADING V3.0 - Filtros Inteligentes
+        # V4.0: SISTEMA AGRESSIVO - META 5% DIÁRIO
+        # =====================================================
+        # AVISO: Trading de alto risco. Nunca arrisque capital
+        # que não pode perder. 5% diário é meta agressiva.
         # =====================================================
 
-        # Trailing stop config
-        self.trailing_stop_activation = config.get('risk.trailing_stop_activation', 0.03)
-        self.trailing_stop_distance = config.get('risk.trailing_stop_distance', 0.015)
+        # V4.0: TRAILING STOP AGRESSIVO
+        self.trailing_stop_activation = 0.01   # Ativa em +1% (era 3%)
+        self.trailing_stop_distance = 0.005    # Distância 0.5% (era 1.5%)
 
-        # Max drawdown enforcement
-        self.max_drawdown = config.get('risk.max_drawdown', 0.10)
+        # V4.0: MAX DRAWDOWN com limites diários
+        self.max_drawdown = 0.05               # 5% máximo (era 10%)
         self.trading_paused = False
 
-        # Cooldown ADAPTATIVO (win=2h, loss=4h)
-        self.cooldown_after_win = 2 * 60 * 60  # 2 horas
-        self.cooldown_after_loss = 4 * 60 * 60  # 4 horas
-        self.last_trade_time = {}  # {symbol: datetime}
-        self.last_trade_result = {}  # {symbol: 'win' ou 'loss'}
+        # V4.0: COOLDOWN REDUZIDO DRASTICAMENTE
+        self.cooldown_after_win = 10 * 60      # 10 minutos (era 2h)
+        self.cooldown_after_loss = 30 * 60     # 30 minutos (era 4h)
+        self.last_trade_time = {}
+        self.last_trade_result = {}
 
-        # Max positions
-        self.max_positions = 2
+        # V4.0: MAX POSITIONS AUMENTADO
+        self.max_positions = 5                 # Aumentado de 2 para 5
 
         # =====================================================
-        # V3.2: SISTEMA DE TRADING INTELIGENTE - DESBLOQUEADO
+        # V4.0: PARÂMETROS FASE 1 - FUNDAMENTOS AGRESSIVOS
         # =====================================================
 
-        # V3.2: SISTEMA DE PONTUAÇÃO DE FILTROS (MAIS RELAXADO)
-        # Total: 100 pontos, mínimo para entrada: 45 pontos (era 50)
-        self.filter_threshold = 45  # Reduzido novamente para permitir mais entradas
+        # V4.0: SISTEMA DE PONTUAÇÃO RELAXADO
+        self.filter_threshold = 25             # Reduzido de 45 para 25
         self.filter_weights = {
-            'macro_trend': 30,      # EMA50 > EMA200
-            'volume': 25,           # Volume ratio
-            'news': 20,             # Sentimento de notícias
-            'momentum': 15,         # MACD > 0
-            'volatility': 10,       # ATR adequado (1-3%)
+            'macro_trend': 40,     # Aumentado (era 30)
+            'volume': 20,          # Reduzido (era 25)
+            'news': 10,            # Reduzido (era 20)
+            'momentum': 25,        # Aumentado (era 15)
+            'volatility': 5,       # Reduzido (era 10)
         }
 
-        # V3.2: NÍVEIS DE SINAL com parâmetros AINDA MAIS RELAXADOS
+        # V4.0: NÍVEIS DE SINAL AGRESSIVOS
         self.signal_levels = {
             'STRONG': {
-                'min_score': 55,            # Era 60
-                'min_filter_points': 45,    # Era 55 - MAIS REDUÇÃO
-                'max_rsi': 48,              # Era 45
-                'exposure': 0.05,           # 5%
-                'take_profit': 0.05,        # 5%
-                'stop_loss': 0.02,          # 2%
-                'trailing_activation': 0.03,
+                'min_score': 40,            # Era 55
+                'min_filter_points': 30,    # Era 45
+                'max_rsi': 65,              # Era 48 - MUITO MAIS FLEXÍVEL
+                'exposure': 0.20,           # 20% por trade (era 5%)
+                'take_profit': 0.02,        # 2% TP (era 5%)
+                'stop_loss': 0.01,          # 1% SL (era 2%)
+                'trailing_activation': 0.01,
             },
             'MODERATE': {
-                'min_score': 45,            # Era 50
-                'min_filter_points': 35,    # Era 45 - MAIS REDUÇÃO
-                'max_rsi': 52,              # Era 50
-                'exposure': 0.035,          # 3.5%
-                'take_profit': 0.04,        # 4%
-                'stop_loss': 0.015,         # 1.5%
-                'trailing_activation': 0.025,
+                'min_score': 35,            # Era 45
+                'min_filter_points': 25,    # Era 35
+                'max_rsi': 70,              # Era 52
+                'exposure': 0.15,           # 15% por trade (era 3.5%)
+                'take_profit': 0.02,        # 2% TP (era 4%)
+                'stop_loss': 0.01,          # 1% SL (era 1.5%)
+                'trailing_activation': 0.01,
             },
             'RECOVERY': {
-                'min_score': 40,            # Era 45
-                'min_filter_points': 30,    # Era 35 - MAIS REDUÇÃO
-                'max_rsi': 45,              # Era 40
-                'exposure': 0.02,           # 2%
-                'take_profit': 0.03,        # 3%
-                'stop_loss': 0.01,          # 1%
-                'trailing_activation': None,
+                'min_score': 30,            # Era 40
+                'min_filter_points': 20,    # Era 30
+                'max_rsi': 35,              # Sobrevendido extremo
+                'exposure': 0.10,           # 10% por trade (era 2%)
+                'take_profit': 0.015,       # 1.5% TP (era 3%)
+                'stop_loss': 0.008,         # 0.8% SL (era 1%)
+                'trailing_activation': 0.008,
             },
         }
 
-        # V3.2: DETECÇÃO DE REGIME DE MERCADO
-        self.current_regime = 'LATERAL'  # BULL, LATERAL, BEAR
-        self.regime_adx_threshold = 25   # ADX > 25 = tendência forte
+        # V4.0: DETECÇÃO DE REGIME
+        self.current_regime = 'LATERAL'
+        self.regime_adx_threshold = 20         # Mais sensível (era 25)
 
-        # V3.2: POSITION TIMEOUT - MAIS AGRESSIVO (4h em vez de 6h)
-        self.position_timeout_hours = 4  # Reduzido de 6h para 4h
-        self.stale_position_min_pnl = -0.02  # Só fecha se PnL > -2% (era -1%)
+        # V4.0: POSITION TIMEOUT MUITO MAIS CURTO
+        self.position_timeout_hours = 0.75     # 45 minutos (era 4h)
+        self.stale_position_min_pnl = -0.01    # -1% para fechar (era -2%)
 
-        # V3.2: POSITION ROTATION - Permite rotação para sinais fortes
+        # V4.0: ROTATION AGRESSIVA
         self.enable_rotation = True
-        self.rotation_min_score = 60  # Score mínimo para rotação (era 65)
-        self.rotation_min_pnl = -0.01  # PnL mínimo da posição a fechar (-1%)
+        self.rotation_min_score = 40           # Era 60
+        self.rotation_min_pnl = -0.005         # -0.5% (era -1%)
 
-        # V3.2: STRONG_BUY OVERRIDE - MUITO MAIS RELAXADO
+        # V4.0: STRONG_BUY OVERRIDE MUITO RELAXADO
         self.strong_buy_override = {
             'enabled': True,
-            'min_score': 60,            # Era 65
-            'max_rsi': 42,              # Era 38 - GRANDE RELAXAMENTO
-            'volume_override': 0.8,     # Aceita volume 0.8x (era 1.0x)
-            'ignore_trend': True,       # Ignora trend filter
+            'min_score': 40,            # Era 60
+            'max_rsi': 65,              # Era 42
+            'volume_override': 0.5,     # Aceita volume 0.5x
+            'ignore_trend': True,
         }
 
-        # V3.2: MODO DE EMERGÊNCIA - Ativa após 3h sem entradas
+        # V4.0: MODO EMERGÊNCIA MAIS RÁPIDO
         self.emergency_mode = {
             'enabled': True,
-            'trigger_hours': 3,         # Ativa após 3h sem entradas
+            'trigger_hours': 1,             # 1h sem entradas (era 3h)
             'active': False,
-            'max_positions_override': 3,  # Aumenta de 2 para 3
-            'filter_relaxation': 0.8,     # Reduz thresholds em 20%
-            'duration_hours': 6,          # Duração do modo emergência
+            'max_positions_override': 7,    # Até 7 posições
+            'filter_relaxation': 0.6,       # Relaxa 40% (era 20%)
+            'duration_hours': 4,            # 4h de duração
             'activated_at': None,
         }
 
-        # V3.2: TRACKING DE ÚLTIMA ENTRADA
+        # V4.0: TRACKING DE ÚLTIMA ENTRADA
         self.last_entry_time = None
         self.hours_without_entry = 0
+
+        # =====================================================
+        # V4.0: LIMITES DIÁRIOS DE SEGURANÇA
+        # =====================================================
+        self.daily_limits = {
+            'target_profit': 0.05,      # Meta: +5% diário
+            'max_profit': 0.10,         # Parar em +10%
+            'max_loss': -0.03,          # Parar em -3%
+            'max_trades': 20,           # Máximo 20 trades/dia
+            'consecutive_losses_pause': 3,  # Pausa após 3 perdas seguidas
+        }
+
+        # V4.0: TRACKING DIÁRIO
+        self.daily_stats = {
+            'start_capital': self.crypto_initial_capital,
+            'current_profit_pct': 0.0,
+            'trades_today': 0,
+            'wins_today': 0,
+            'losses_today': 0,
+            'consecutive_losses': 0,
+            'day_started': get_brazil_time().date(),
+            'target_reached': False,
+            'limit_reached': False,
+        }
+
+        # V4.0: HORÁRIO IDEAL DE OPERAÇÃO (06:00-14:00)
+        self.optimal_trading_hours = {
+            'enabled': True,
+            'start_hour': 6,
+            'end_hour': 14,
+            'reduce_exposure_outside': 0.5,  # 50% exposição fora do horário
+        }
 
         # Estatísticas de rejeição (para logging)
         self.rejection_stats = {
@@ -518,9 +552,109 @@ class LoboSystem:
                 system_logger.info(f"✅ Drawdown reduziu para {drawdown*100:.1f}%. Trading RETOMADO.")
                 self.trading_paused = False
 
+    def _check_daily_reset(self):
+        """V4.0: Reseta estatísticas diárias à meia-noite."""
+        today = get_brazil_time().date()
+        if self.daily_stats['day_started'] != today:
+            old_profit = self.daily_stats['current_profit_pct']
+            system_logger.info(f"\n🌅 NOVO DIA DE TRADING - Resetando estatísticas")
+            system_logger.info(f"   Resultado ontem: {old_profit*100:+.2f}%")
+
+            self.daily_stats = {
+                'start_capital': self.crypto_capital + sum(
+                    p.get('trade_value', 0) for p in self.crypto_positions.values()
+                ),
+                'current_profit_pct': 0.0,
+                'trades_today': 0,
+                'wins_today': 0,
+                'losses_today': 0,
+                'consecutive_losses': 0,
+                'day_started': today,
+                'target_reached': False,
+                'limit_reached': False,
+            }
+
+    def _update_daily_stats(self, profit: float, is_win: bool):
+        """V4.0: Atualiza estatísticas diárias após cada trade."""
+        self.daily_stats['trades_today'] += 1
+
+        if is_win:
+            self.daily_stats['wins_today'] += 1
+            self.daily_stats['consecutive_losses'] = 0
+        else:
+            self.daily_stats['losses_today'] += 1
+            self.daily_stats['consecutive_losses'] += 1
+
+        # Recalcula lucro do dia
+        current_capital = self.crypto_capital + sum(
+            p.get('trade_value', 0) for p in self.crypto_positions.values()
+        )
+        start_capital = self.daily_stats['start_capital']
+        if start_capital > 0:
+            self.daily_stats['current_profit_pct'] = (current_capital - start_capital) / start_capital
+
+        # Verifica se atingiu meta ou limite
+        pct = self.daily_stats['current_profit_pct']
+        if pct >= self.daily_limits['target_profit']:
+            self.daily_stats['target_reached'] = True
+            system_logger.info(f"\n🎯 META DIÁRIA ATINGIDA: {pct*100:+.2f}%!")
+
+        if pct >= self.daily_limits['max_profit']:
+            self.daily_stats['limit_reached'] = True
+            system_logger.warning(f"\n🛑 LUCRO MÁXIMO ATINGIDO: {pct*100:+.2f}% - Parando operações")
+
+        if pct <= self.daily_limits['max_loss']:
+            self.daily_stats['limit_reached'] = True
+            system_logger.warning(f"\n🛑 PERDA MÁXIMA ATINGIDA: {pct*100:+.2f}% - Parando operações")
+
+    def _check_daily_limits(self) -> bool:
+        """
+        V4.0: Verifica se pode continuar operando baseado nos limites diários.
+        Returns: True se pode operar, False se deve parar.
+        """
+        self._check_daily_reset()
+
+        # Verifica limite de lucro/perda
+        if self.daily_stats['limit_reached']:
+            return False
+
+        # Verifica máximo de trades
+        if self.daily_stats['trades_today'] >= self.daily_limits['max_trades']:
+            system_logger.info(f"⚠️ Máximo de trades diários atingido ({self.daily_limits['max_trades']})")
+            return False
+
+        # Verifica perdas consecutivas
+        if self.daily_stats['consecutive_losses'] >= self.daily_limits['consecutive_losses_pause']:
+            system_logger.warning(
+                f"⚠️ {self.daily_stats['consecutive_losses']} perdas consecutivas - "
+                f"Pausando por segurança"
+            )
+            return False
+
+        return True
+
+    def _is_optimal_trading_hour(self) -> tuple:
+        """
+        V4.0: Verifica se está no horário ideal de operação.
+        Returns: (is_optimal, exposure_multiplier)
+        """
+        if not self.optimal_trading_hours.get('enabled', False):
+            return True, 1.0
+
+        now = get_brazil_time()
+        hour = now.hour
+
+        start = self.optimal_trading_hours['start_hour']
+        end = self.optimal_trading_hours['end_hour']
+
+        if start <= hour < end:
+            return True, 1.0
+        else:
+            return False, self.optimal_trading_hours['reduce_exposure_outside']
+
     def _check_emergency_mode(self):
         """
-        V3.2: Verifica e ativa modo de emergência após 3h sem entradas.
+        V4.0: Verifica e ativa modo de emergência após 1h sem entradas.
         Relaxa filtros e aumenta max positions temporariamente.
         """
         if not self.emergency_mode.get('enabled', False):
@@ -581,19 +715,43 @@ class LoboSystem:
 
     def _log_positions_dashboard(self, price_map: dict):
         """
-        V3.2: Dashboard de diagnóstico mostrando estado detalhado das posições.
-        Inclui status de emergência e contagem regressiva.
+        V4.0: Dashboard agressivo com métricas de 5% diário.
         """
         now = get_brazil_time()
 
-        # V3.2: Verifica modo de emergência PRIMEIRO
+        # V4.0: Verifica limites e emergência
         self._check_emergency_mode()
 
         system_logger.info("\n" + "=" * 60)
-        system_logger.info("📊 V3.2 DASHBOARD DE DIAGNÓSTICO")
+        system_logger.info("🐺 V4.0 LOBO AGRESSIVO - META 5% DIÁRIO")
         system_logger.info("=" * 60)
 
-        # V3.2: Status do modo emergência
+        # V4.0: Métricas do dia
+        daily_pct = self.daily_stats['current_profit_pct'] * 100
+        target_pct = self.daily_limits['target_profit'] * 100
+        progress = min(100, (daily_pct / target_pct) * 100) if target_pct > 0 else 0
+
+        if daily_pct >= 0:
+            emoji = "🟢" if daily_pct >= target_pct else "📈"
+        else:
+            emoji = "🔴"
+
+        system_logger.info(f"{emoji} P&L HOJE: {daily_pct:+.2f}% / Meta: {target_pct:.1f}% ({progress:.0f}%)")
+        system_logger.info(f"   Trades: {self.daily_stats['trades_today']}/{self.daily_limits['max_trades']} | "
+                          f"Wins: {self.daily_stats['wins_today']} | Losses: {self.daily_stats['losses_today']}")
+
+        if self.daily_stats['consecutive_losses'] > 0:
+            system_logger.info(f"   ⚠️ Perdas consecutivas: {self.daily_stats['consecutive_losses']}")
+
+        if self.daily_stats['target_reached']:
+            system_logger.info(f"   🎯 META ATINGIDA!")
+
+        # V4.0: Horário ideal
+        is_optimal, exposure_mult = self._is_optimal_trading_hour()
+        hour_status = "✅ HORÁRIO IDEAL" if is_optimal else f"⚡ Fora do horário (exposição {exposure_mult*100:.0f}%)"
+        system_logger.info(f"   {hour_status}")
+
+        # V4.0: Status do modo emergência
         if self.emergency_mode.get('active', False):
             system_logger.info("🚨 MODO EMERGÊNCIA: ATIVO")
             if self.emergency_mode['activated_at']:
@@ -1210,20 +1368,27 @@ class LoboSystem:
 
     def _execute_crypto_trades(self, buy_signals: list, sell_signals: list, price_map: dict):
         """
-        V3.2: Executa trades de crypto com SISTEMA DESBLOQUEADO:
-        - Filter scoring (0-100 pontos, mínimo 45)
-        - Signal levels RELAXADOS
-        - STRONG_BUY override agressivo
-        - Position rotation para STRONG_BUY
-        - Position timeout 4h
-        - Modo emergência após 3h sem entradas
-        - Logging diagnóstico ultra-detalhado
+        V4.0: Sistema AGRESSIVO para meta de 5% diário:
+        - Filter threshold 25pts (relaxado de 45)
+        - Take Profit 2%, Stop Loss 1%
+        - 5 posições simultâneas
+        - Position timeout 45 minutos
+        - Cooldown: 10min win / 30min loss
+        - Limites diários: +10% max / -3% max
+        - Horário ideal: 06:00-14:00
         """
         mode = config.get('execution.mode', 'simulation')
+
+        # V4.0: Reset diário à meia-noite
+        self._check_daily_reset()
 
         # V3.2: Verifica se trading está pausado por drawdown
         if self.trading_paused:
             system_logger.warning("\n⚠️ Trading PAUSADO - Max Drawdown atingido")
+            return
+
+        # V4.0: Verifica limites diários
+        if not self._check_daily_limits():
             return
 
         # V3.2: Usa max positions EFETIVO (considera modo emergência)
@@ -1507,6 +1672,9 @@ class LoboSystem:
         is_win = profit >= 0
         self.last_trade_time[symbol] = now
         self.last_trade_result[symbol] = 'win' if is_win else 'loss'
+
+        # V4.0: Atualiza estatísticas diárias
+        self._update_daily_stats(profit, is_win)
 
         # V3.0: Calcula próximo cooldown
         next_cooldown = self.cooldown_after_win if is_win else self.cooldown_after_loss
