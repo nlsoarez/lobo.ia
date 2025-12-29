@@ -13,21 +13,24 @@ class SignalAnalyzer:
     """
     Analisa dados de mercado e gera sinais de compra/venda.
     Usa indicadores técnicos configuráveis (RSI, EMA, etc.).
+    Suporta modo agressivo (V4.0) para momentum trading.
     """
 
-    def __init__(self, data: pd.DataFrame, symbol: str = "PETR4.SA"):
+    def __init__(self, data: pd.DataFrame, symbol: str = "PETR4.SA", aggressive_mode: bool = True):
         """
         Inicializa o analisador de sinais.
 
         Args:
             data: DataFrame com dados OHLCV.
             symbol: Símbolo do ativo sendo analisado.
+            aggressive_mode: Se True, usa estratégia momentum (V4.0 agressivo).
 
         Raises:
             ValueError: Se os dados forem inválidos ou insuficientes.
         """
         self.symbol = symbol
         self.data = data.copy()  # Cria cópia para não modificar original
+        self.aggressive_mode = aggressive_mode
 
         # Carrega configurações de estratégia
         strategy_config = config.get_section('strategy')
@@ -149,19 +152,57 @@ class SignalAnalyzer:
         system_logger.debug(
             f"Análise {self.symbol}: RSI={rsi:.2f}, Close={close:.2f}, "
             f"EMA_Fast={ema_fast:.2f}, EMA_Slow={ema_slow:.2f}, "
-            f"Vol={volume:.0f}, Vol_SMA={volume_sma:.0f}"
+            f"Vol={volume:.0f}, Vol_SMA={volume_sma:.0f}, Modo={'AGRESSIVO' if self.aggressive_mode else 'CONSERVADOR'}"
         )
 
-        # Lógica de sinal de COMPRA
-        buy_conditions = [
-            rsi < self.rsi_oversold,              # RSI em zona de sobrevenda
-            close > ema_fast,                      # Preço acima da EMA rápida
-            ema_fast > ema_slow,                   # Tendência de alta (EMA rápida > EMA lenta)
-            volume > volume_sma * 0.8,             # Volume razoável (80% da média)
-            macd_diff > 0                          # MACD positivo (momentum de alta)
-        ]
+        # V4.0: Lógica de sinal de COMPRA - Modo Agressivo (Momentum Trading)
+        if self.aggressive_mode:
+            # Estratégia Momentum: compra em tendência de alta, RSI não sobrecomprado
+            buy_conditions = [
+                rsi < 70,                              # RSI não sobrecomprado
+                rsi > 35,                              # RSI com algum momentum (não muito fraco)
+                close > ema_fast,                      # Preço acima da EMA rápida
+                ema_fast > ema_slow,                   # Tendência de alta (EMA rápida > EMA lenta)
+                macd_diff > 0                          # MACD positivo (momentum de alta)
+            ]
 
-        if all(buy_conditions):
+            # Condição adicional: volume acima de 50% da média OU forte tendência
+            volume_ok = volume > volume_sma * 0.5
+            strong_trend = (ema_fast - ema_slow) / ema_slow > 0.005  # 0.5% de diferença
+
+            if all(buy_conditions) and (volume_ok or strong_trend):
+                signal_strength = self._calculate_signal_strength(rsi, ema_fast, ema_slow, macd_diff, volume, volume_sma)
+                signal = {
+                    "symbol": self.symbol,
+                    "action": "BUY",
+                    "price": float(close),
+                    "strength": signal_strength,
+                    "indicators": {
+                        "rsi": float(rsi),
+                        "ema_fast": float(ema_fast),
+                        "ema_slow": float(ema_slow),
+                        "macd_diff": float(macd_diff),
+                        "volume_ratio": float(volume / volume_sma) if volume_sma > 0 else 1.0
+                    }
+                }
+
+                system_logger.info(
+                    f"🟢 SINAL AGRESSIVO DE COMPRA: {self.symbol} @ {close:.2f} "
+                    f"(RSI: {rsi:.1f}, Força: {signal_strength:.2f})"
+                )
+
+                return signal
+        else:
+            # Estratégia Conservadora: compra apenas em sobrevenda
+            buy_conditions = [
+                rsi < self.rsi_oversold,              # RSI em zona de sobrevenda
+                close > ema_fast,                      # Preço acima da EMA rápida
+                ema_fast > ema_slow,                   # Tendência de alta (EMA rápida > EMA lenta)
+                volume > volume_sma * 0.8,             # Volume razoável (80% da média)
+                macd_diff > 0                          # MACD positivo (momentum de alta)
+            ]
+
+        if not self.aggressive_mode and all(buy_conditions):
             signal = {
                 "symbol": self.symbol,
                 "action": "BUY",
@@ -214,6 +255,62 @@ class SignalAnalyzer:
         # Sem sinal claro
         system_logger.debug(f"Sem sinal claro para {self.symbol} (RSI: {rsi:.1f})")
         return None
+
+    def _calculate_signal_strength(self, rsi: float, ema_fast: float, ema_slow: float,
+                                    macd_diff: float, volume: float, volume_sma: float) -> float:
+        """
+        Calcula a força do sinal de compra (0.0 a 1.0).
+
+        Critérios:
+        - RSI na zona ideal (45-65): maior peso
+        - Tendência forte (EMA diferença): maior peso
+        - Volume acima da média: bônus
+        - MACD momentum: bônus
+
+        Returns:
+            Força do sinal entre 0.0 e 1.0
+        """
+        strength = 0.0
+
+        # RSI na zona momentum ideal (45-60) = máxima força
+        if 45 <= rsi <= 60:
+            strength += 0.35
+        elif 40 <= rsi < 45 or 60 < rsi <= 65:
+            strength += 0.25
+        elif 35 <= rsi < 40 or 65 < rsi <= 70:
+            strength += 0.15
+        else:
+            strength += 0.05
+
+        # Força da tendência (EMA spread)
+        if ema_slow > 0:
+            ema_spread = (ema_fast - ema_slow) / ema_slow
+            if ema_spread > 0.02:  # > 2% spread
+                strength += 0.30
+            elif ema_spread > 0.01:  # > 1% spread
+                strength += 0.20
+            elif ema_spread > 0.005:  # > 0.5% spread
+                strength += 0.15
+            else:
+                strength += 0.05
+
+        # Volume confirmation
+        if volume_sma > 0:
+            volume_ratio = volume / volume_sma
+            if volume_ratio > 1.5:
+                strength += 0.20
+            elif volume_ratio > 1.0:
+                strength += 0.15
+            elif volume_ratio > 0.7:
+                strength += 0.10
+            else:
+                strength += 0.05
+
+        # MACD momentum
+        if macd_diff > 0:
+            strength += 0.15
+
+        return min(1.0, strength)
 
     def get_current_indicators(self) -> Dict[str, float]:
         """
