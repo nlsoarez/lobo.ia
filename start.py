@@ -76,6 +76,20 @@ except ImportError as e:
     HAS_PHASE3 = False
     system_logger.warning(f"Phase 3 módulos não disponíveis: {e}")
 
+# V4.0 Phase 4: Importa módulos de auto-otimização
+try:
+    from auto_optimized_trading_system import AutoOptimizedTradingSystem
+    from auto_optimization_engine import AutoOptimizationEngine
+    from market_regime_detector import MarketRegimeDetector
+    from reinforcement_learning_agent import TradingRLAgent
+    from meta_learning_system import MetaLearningSystem
+    from multi_objective_optimizer import MultiObjectiveOptimizer
+    HAS_PHASE4 = True
+    system_logger.info("V4.0 Phase 4 módulos carregados")
+except ImportError as e:
+    HAS_PHASE4 = False
+    system_logger.warning(f"Phase 4 módulos não disponíveis: {e}")
+
 
 class MarketScheduler:
     """
@@ -227,6 +241,19 @@ class LoboSystem:
             self.allocation_manager = None
             self.performance_monitor = None
             self.decision_engine = None
+
+        # V4.0 Phase 4: Sistema auto-otimizado
+        self.phase4_enabled = HAS_PHASE4
+        if self.phase4_enabled:
+            self.auto_optimizer = AutoOptimizedTradingSystem(
+                initial_capital=config.get('crypto.capital_usd', 1000.0)
+            )
+            self.last_optimization_cycle = None
+            self.optimization_interval_hours = 6
+            system_logger.info("V4.0 Phase 4: Sistema auto-otimizado ATIVO")
+        else:
+            self.auto_optimizer = None
+            self.last_optimization_cycle = None
 
         # Gerenciamento de posições crypto
         self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time, max_price}}
@@ -577,6 +604,23 @@ class LoboSystem:
 
                 # 2. Executa trades baseado em sinais
                 self._execute_crypto_trades(buy_signals, sell_signals, price_map)
+
+                # V4.0 Phase 4: Executa ciclo de auto-otimização
+                if self.phase4_enabled:
+                    # Prepara dados de mercado para Phase 4
+                    market_data = [{'close': r.get('price', 0), 'volume': 0,
+                                   'score': r.get('total_score', 50)}
+                                  for r in results[:50]]
+
+                    # Busca trades recentes do banco
+                    recent_trades = []
+                    if hasattr(self, 'db_logger') and self.db_logger:
+                        try:
+                            recent_trades = self.db_logger.get_recent_trades(days=7) or []
+                        except:
+                            pass
+
+                    self._run_phase4_optimization_cycle(market_data, recent_trades)
 
             self.last_crypto_run = now
 
@@ -1009,6 +1053,106 @@ class LoboSystem:
         except Exception as e:
             system_logger.debug(f"Erro Kelly allocation: {e}")
             return 0.15
+
+    def _run_phase4_optimization_cycle(self, market_data: list, recent_trades: list):
+        """
+        V4.0 Phase 4: Executa ciclo de auto-otimização.
+        Detecta regime, otimiza parâmetros e aplica meta-aprendizado.
+        """
+        if not self.phase4_enabled or not self.auto_optimizer:
+            return
+
+        try:
+            now = datetime.now()
+
+            # Verifica intervalo mínimo entre ciclos
+            if self.last_optimization_cycle:
+                hours_since = (now - self.last_optimization_cycle).total_seconds() / 3600
+                if hours_since < self.optimization_interval_hours:
+                    return
+
+            system_logger.info(f"\n🤖 PHASE 4: Iniciando ciclo de auto-otimização...")
+
+            # Executa ciclo de otimização
+            cycle_result = self.auto_optimizer.run_optimization_cycle(
+                market_data=market_data,
+                recent_trades=recent_trades
+            )
+
+            self.last_optimization_cycle = now
+
+            # Loga resultado
+            if cycle_result['actions_taken']:
+                system_logger.info(f"   Ações executadas: {', '.join(cycle_result['actions_taken'])}")
+
+            if cycle_result['new_regime']:
+                system_logger.info(f"   Regime detectado: {cycle_result['new_regime']}")
+
+            if cycle_result['strategy_changed']:
+                system_logger.info(f"   ✅ Estratégia atualizada")
+
+            # Atualiza estratégia atual se otimizada
+            if cycle_result['strategy_changed'] and self.auto_optimizer.current_strategy:
+                self._apply_phase4_strategy(self.auto_optimizer.current_strategy)
+
+        except Exception as e:
+            system_logger.warning(f"Erro no ciclo Phase 4: {e}")
+
+    def _apply_phase4_strategy(self, strategy: dict):
+        """V4.0 Phase 4: Aplica estratégia otimizada."""
+        try:
+            # Atualiza parâmetros de entrada
+            if 'entry_params' in strategy:
+                entry = strategy['entry_params']
+                if 'score_threshold' in entry:
+                    self.filter_threshold = entry['score_threshold']
+
+            # Atualiza parâmetros de saída
+            if 'exit_params' in strategy:
+                exit_p = strategy['exit_params']
+                if 'take_profit' in exit_p:
+                    self.crypto_take_profit = exit_p['take_profit'] / 100
+                if 'stop_loss' in exit_p:
+                    self.crypto_stop_loss = exit_p['stop_loss'] / 100
+                if 'timeout_minutes' in exit_p:
+                    self.position_timeout_hours = exit_p['timeout_minutes'] / 60
+
+            # Atualiza parâmetros de risco
+            if 'risk_params' in strategy:
+                risk = strategy['risk_params']
+                if 'position_size_percent' in risk:
+                    self.crypto_exposure = risk['position_size_percent']
+
+            system_logger.info(f"   📊 Estratégia Phase 4 aplicada:")
+            system_logger.info(f"      Threshold: {self.filter_threshold}")
+            system_logger.info(f"      TP/SL: {self.crypto_take_profit*100:.1f}%/{self.crypto_stop_loss*100:.1f}%")
+            system_logger.info(f"      Exposure: {self.crypto_exposure*100:.1f}%")
+
+        except Exception as e:
+            system_logger.warning(f"Erro aplicando estratégia Phase 4: {e}")
+
+    def _record_trade_for_learning(self, symbol: str, result: dict):
+        """V4.0 Phase 4: Registra trade para aprendizado."""
+        if not self.phase4_enabled or not self.auto_optimizer:
+            return
+
+        try:
+            trade_data = {
+                'symbol': symbol,
+                'result': 'success' if result.get('profit', 0) > 0 else 'failure',
+                'profit': result.get('profit', 0),
+                'profit_pct': result.get('profit_pct', 0),
+                'entry_rsi': result.get('rsi', 50),
+                'volume_ratio': result.get('volume_ratio', 1.0),
+                'regime': self.current_regime,
+                'hold_time_minutes': result.get('hold_time_minutes', 30),
+                'timestamp': datetime.now()
+            }
+
+            self.auto_optimizer.record_trade_result(trade_data)
+
+        except Exception as e:
+            system_logger.debug(f"Erro registrando trade para learning: {e}")
 
     def _log_positions_dashboard(self, price_map: dict):
         """
