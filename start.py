@@ -759,13 +759,29 @@ class LoboSystem:
 
     def _check_emergency_mode(self):
         """
-        V4.0: Verifica e ativa modo de emergência após 1h sem entradas.
-        Relaxa filtros e aumenta max positions temporariamente.
+        V4.0: Verifica e ativa modo de emergência.
+        CORRIGIDO: Não ativa na inicialização (bug 999h).
+        Considera múltiplos fatores: tempo, performance, posições.
         """
         if not self.emergency_mode.get('enabled', False):
             return
 
         now = get_brazil_time()
+
+        # V4.0 FIX: Não ativa emergência na primeira execução
+        # Só ativa após pelo menos uma iteração completa
+        if not hasattr(self, '_first_iteration_complete'):
+            self._first_iteration_complete = False
+
+        if not self._first_iteration_complete:
+            # Marca primeira iteração como completa após 5 minutos de execução
+            if hasattr(self, '_system_start_time'):
+                elapsed = (now - self._system_start_time).total_seconds() / 60
+                if elapsed >= 5:
+                    self._first_iteration_complete = True
+            else:
+                self._system_start_time = now
+            return  # Não verifica emergência ainda
 
         # Calcula horas desde última entrada
         if self.last_entry_time:
@@ -778,14 +794,41 @@ class LoboSystem:
                 hours_since = 0
             self.hours_without_entry = hours_since
         else:
-            hours_since = 999  # Nunca entrou
+            # V4.0 FIX: Se nunca entrou, usa tempo desde início do sistema
+            if hasattr(self, '_system_start_time'):
+                hours_since = (now - self._system_start_time).total_seconds() / 3600
+            else:
+                hours_since = 0  # Não ativa emergência se não souber quando começou
+            self.hours_without_entry = hours_since
+
+        # V4.0 FIX: Critérios múltiplos para ativar emergência
+        should_activate = False
+        activation_reasons = []
+
+        # Critério 1: Tempo sem entrada (apenas se > trigger_hours E não temos posições)
+        if hours_since >= self.emergency_mode['trigger_hours']:
+            if len(self.crypto_positions) == 0:
+                activation_reasons.append(f"{hours_since:.1f}h sem entradas")
+                should_activate = True
+
+        # Critério 2: Performance ruim do dia
+        daily_pnl = self.daily_stats.get('current_profit_pct', 0)
+        if daily_pnl < -0.02 and self.daily_stats.get('trades_today', 0) >= 2:
+            activation_reasons.append(f"PnL diário: {daily_pnl*100:.1f}%")
+            should_activate = True
+
+        # Critério 3: Perdas consecutivas
+        if self.daily_stats.get('consecutive_losses', 0) >= 3:
+            activation_reasons.append(f"{self.daily_stats['consecutive_losses']} perdas consecutivas")
+            should_activate = True
 
         # Verifica se deve ativar modo emergência
-        if hours_since >= self.emergency_mode['trigger_hours'] and not self.emergency_mode['active']:
+        if should_activate and not self.emergency_mode['active']:
             self.emergency_mode['active'] = True
             self.emergency_mode['activated_at'] = now
             system_logger.warning(f"\n🚨 MODO EMERGÊNCIA ATIVADO!")
-            system_logger.warning(f"   Motivo: {hours_since:.1f}h sem novas entradas")
+            for reason in activation_reasons:
+                system_logger.warning(f"   Motivo: {reason}")
             system_logger.warning(f"   Max positions: {self.max_positions} → {self.emergency_mode['max_positions_override']}")
             system_logger.warning(f"   Filtros relaxados em {(1-self.emergency_mode['filter_relaxation'])*100:.0f}%")
             system_logger.warning(f"   Duração: {self.emergency_mode['duration_hours']}h")
@@ -799,10 +842,16 @@ class LoboSystem:
                 else:
                     hours_active = (datetime.now() - activated_at).total_seconds() / 3600
 
+                # Desativa após duração OU se fez entrada com sucesso
                 if hours_active >= self.emergency_mode['duration_hours']:
                     self.emergency_mode['active'] = False
                     self.emergency_mode['activated_at'] = None
                     system_logger.info(f"\n✅ Modo emergência DESATIVADO após {hours_active:.1f}h")
+                elif self.last_entry_time and self.last_entry_time > activated_at:
+                    # Desativa se fez entrada durante emergência
+                    self.emergency_mode['active'] = False
+                    self.emergency_mode['activated_at'] = None
+                    system_logger.info(f"\n✅ Modo emergência DESATIVADO (entrada realizada)")
             except:
                 pass
 

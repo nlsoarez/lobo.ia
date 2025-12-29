@@ -22,6 +22,74 @@ except ImportError:
     HAS_CMC = False
 
 
+# V4.0: Blacklist de criptomoedas com problemas de dados
+# Removidas da análise por falhas frequentes no Yahoo Finance
+CRYPTO_BLACKLIST = {
+    'UNI-USD',    # Dados inconsistentes
+    'GRT-USD',    # Falhas frequentes
+    'FTM-USD',    # Dados ausentes
+    'COMP-USD',   # Delisted em alguns endpoints
+    'IMX-USD',    # Dados esparsos
+    'RNDR-USD',   # Falhas de API
+    'FLOW-USD',   # Sem dados recentes
+    'APE-USD',    # Dados inconsistentes
+    'SUSHI-USD',  # Baixa liquidez
+}
+
+
+def normalize_dataframe_columns(df):
+    """
+    Normaliza nomes de colunas para lowercase.
+    Resolve problema 'Close' vs 'close'.
+
+    Args:
+        df: DataFrame com colunas originais
+
+    Returns:
+        DataFrame com colunas normalizadas
+    """
+    if df is None or df.empty:
+        return df
+
+    # Se for MultiIndex (múltiplos símbolos), pega apenas o primeiro nível
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # Mapeia para lowercase
+    column_mapping = {}
+    for col in df.columns:
+        if isinstance(col, str):
+            column_mapping[col] = col.lower()
+
+    return df.rename(columns=column_mapping)
+
+
+def get_close_column(df):
+    """
+    Retorna a coluna de preço de fechamento (case-insensitive).
+
+    Args:
+        df: DataFrame com dados OHLCV
+
+    Returns:
+        Series com preços de fechamento ou None
+    """
+    if df is None or df.empty:
+        return None
+
+    # Tenta diferentes variações
+    for col in ['Close', 'close', 'CLOSE', 'last', 'Last', 'LAST']:
+        if col in df.columns:
+            return df[col]
+
+    # Fallback: busca case-insensitive
+    for col in df.columns:
+        if isinstance(col, str) and col.lower() == 'close':
+            return df[col]
+
+    return None
+
+
 # V4.0: Lista expandida de 50 criptomoedas para trading agressivo
 # Yahoo Finance format: SYMBOL-USD
 CRYPTOCURRENCIES = {
@@ -153,7 +221,9 @@ class CryptoScanner:
         results = []
         failed = []
 
-        symbols_to_scan = list(CRYPTOCURRENCIES.keys())
+        # V4.0: Filtra blacklist
+        symbols_to_scan = [s for s in CRYPTOCURRENCIES.keys() if s not in CRYPTO_BLACKLIST]
+        system_logger.debug(f"Crypto scan: {len(symbols_to_scan)} ativos ({len(CRYPTO_BLACKLIST)} na blacklist)")
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_symbol = {
@@ -232,14 +302,41 @@ class CryptoScanner:
             Dicionário com análise ou None.
         """
         try:
+            # V4.0: Skip blacklisted cryptos
+            if symbol in CRYPTO_BLACKLIST:
+                return None
+
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=self.period, interval=self.interval)
 
-            if hist.empty or len(hist) < 20:
+            # V4.0: Validação robusta de dados
+            if hist is None or hist.empty or len(hist) < 20:
+                system_logger.debug(f"{symbol}: Dados insuficientes ({len(hist) if hist is not None else 0} candles)")
                 return None
 
-            current_price = hist['Close'].iloc[-1]
-            avg_volume = hist['Volume'].mean()
+            # V4.0: Obtém coluna de preço (case-insensitive)
+            close_col = get_close_column(hist)
+            if close_col is None:
+                system_logger.debug(f"{symbol}: Coluna 'close' não encontrada. Colunas: {list(hist.columns)}")
+                return None
+
+            # V4.0: Verifica NaN nos dados
+            if close_col.isna().sum() > len(close_col) * 0.1:  # > 10% NaN
+                system_logger.debug(f"{symbol}: Muitos valores NaN ({close_col.isna().sum()})")
+                return None
+
+            current_price = close_col.iloc[-1]
+            if pd.isna(current_price) or current_price <= 0:
+                return None
+
+            # V4.0: Obtém volume de forma segura
+            volume_col = None
+            for col in ['Volume', 'volume', 'VOLUME']:
+                if col in hist.columns:
+                    volume_col = hist[col]
+                    break
+
+            avg_volume = volume_col.mean() if volume_col is not None else 0
 
             # Calcula indicadores tecnicos (Yahoo Finance)
             analysis = self._calculate_indicators(hist)
@@ -315,10 +412,35 @@ class CryptoScanner:
     def _calculate_indicators(self, hist: pd.DataFrame) -> Optional[Dict[str, float]]:
         """Calcula indicadores técnicos para cripto."""
         try:
-            close = hist['Close']
-            high = hist['High']
-            low = hist['Low']
-            volume = hist['Volume']
+            # V4.0: Obtém colunas de forma segura (case-insensitive)
+            close = get_close_column(hist)
+            if close is None:
+                return None
+
+            # High/Low/Volume com fallback
+            high = None
+            for col in ['High', 'high', 'HIGH']:
+                if col in hist.columns:
+                    high = hist[col]
+                    break
+            if high is None:
+                high = close  # Fallback
+
+            low = None
+            for col in ['Low', 'low', 'LOW']:
+                if col in hist.columns:
+                    low = hist[col]
+                    break
+            if low is None:
+                low = close  # Fallback
+
+            volume = None
+            for col in ['Volume', 'volume', 'VOLUME']:
+                if col in hist.columns:
+                    volume = hist[col]
+                    break
+            if volume is None:
+                volume = pd.Series([0] * len(close), index=close.index)
 
             # RSI
             rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
@@ -408,7 +530,8 @@ class CryptoScanner:
             scores['volume_score'] = vol_ratio * 60
 
         # Trend Score
-        price = hist['Close'].iloc[-1]
+        close_col = get_close_column(hist)
+        price = close_col.iloc[-1] if close_col is not None else 0
         ema_12 = analysis['ema_12']
         ema_26 = analysis['ema_26']
 
@@ -446,9 +569,14 @@ class CryptoScanner:
         """Calcula variação percentual."""
         if len(hist) < periods + 1:
             return 0.0
-        current = hist['Close'].iloc[-1]
-        past = hist['Close'].iloc[-periods-1]
-        if past == 0:
+
+        close_col = get_close_column(hist)
+        if close_col is None:
+            return 0.0
+
+        current = close_col.iloc[-1]
+        past = close_col.iloc[-periods-1]
+        if pd.isna(past) or past == 0:
             return 0.0
         return ((current - past) / past) * 100
 
