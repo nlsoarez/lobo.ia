@@ -226,6 +226,11 @@ class LoboSystem:
             self.timing_manager = None
             self.breakout_detector = None
 
+        # Gerenciamento de posições crypto (inicializa ANTES das fases que usam)
+        self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time, max_price}}
+        self.crypto_capital = config.get('crypto.capital_usd', 1000.0)
+        self.crypto_initial_capital = self.crypto_capital  # Para calcular drawdown
+
         # V4.0 Phase 3: Sistema de rotação agressiva
         self.phase3_enabled = HAS_PHASE3
         if self.phase3_enabled:
@@ -246,7 +251,7 @@ class LoboSystem:
         self.phase4_enabled = HAS_PHASE4
         if self.phase4_enabled:
             self.auto_optimizer = AutoOptimizedTradingSystem(
-                initial_capital=config.get('crypto.capital_usd', 1000.0)
+                initial_capital=self.crypto_initial_capital
             )
             self.last_optimization_cycle = None
             self.optimization_interval_hours = 6
@@ -254,11 +259,6 @@ class LoboSystem:
         else:
             self.auto_optimizer = None
             self.last_optimization_cycle = None
-
-        # Gerenciamento de posições crypto
-        self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time, max_price}}
-        self.crypto_capital = config.get('crypto.capital_usd', 1000.0)
-        self.crypto_initial_capital = self.crypto_capital  # Para calcular drawdown
         self.crypto_exposure = config.get('crypto.exposure', 0.05)  # 5% por trade
         self.crypto_stop_loss = config.get('risk.stop_loss', 0.02)
         self.crypto_take_profit = config.get('risk.take_profit', 0.05)
