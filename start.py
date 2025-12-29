@@ -50,6 +50,19 @@ except ImportError:
     HAS_NEWS = False
     system_logger.warning("News analyzer nao disponivel")
 
+# V4.0 Phase 2: Importa módulos de seleção avançada
+try:
+    from asset_ranking_system import AssetRankingSystem
+    from technical_pattern_scanner import TechnicalPatternScanner
+    from volume_analyzer import VolumeAnalyzer
+    from market_timing_manager import MarketTimingManager
+    from breakout_detector import BreakoutDetector
+    HAS_PHASE2 = True
+    system_logger.info("V4.0 Phase 2 módulos carregados")
+except ImportError as e:
+    HAS_PHASE2 = False
+    system_logger.warning(f"Phase 2 módulos não disponíveis: {e}")
+
 
 class MarketScheduler:
     """
@@ -169,6 +182,22 @@ class LoboSystem:
         # Analisador de noticias
         self.news_enabled = HAS_NEWS
         self.news_analyzer = NewsAnalyzer() if self.news_enabled else None
+
+        # V4.0 Phase 2: Sistema de seleção avançada
+        self.phase2_enabled = HAS_PHASE2
+        if self.phase2_enabled:
+            self.ranking_system = AssetRankingSystem()
+            self.pattern_scanner = TechnicalPatternScanner()
+            self.volume_analyzer = VolumeAnalyzer()
+            self.timing_manager = MarketTimingManager()
+            self.breakout_detector = BreakoutDetector()
+            system_logger.info("V4.0 Phase 2: Sistema de seleção avançada ATIVO")
+        else:
+            self.ranking_system = None
+            self.pattern_scanner = None
+            self.volume_analyzer = None
+            self.timing_manager = None
+            self.breakout_detector = None
 
         # Gerenciamento de posições crypto
         self.crypto_positions = {}  # {symbol: {quantity, entry_price, entry_time, max_price}}
@@ -514,6 +543,9 @@ class LoboSystem:
                             f"RSI {crypto.get('rsi', 0):.1f} | ${crypto.get('price', 0):.2f} | {crypto['signal']}"
                         )
 
+                    # V4.0 Phase 2: Aplica seleção avançada
+                    buy_signals = self._apply_phase2_selection(buy_signals, price_map)
+
                 # 2. Executa trades baseado em sinais
                 self._execute_crypto_trades(buy_signals, sell_signals, price_map)
 
@@ -712,6 +744,112 @@ class LoboSystem:
         if self.emergency_mode.get('active', False):
             return self.filter_threshold * self.emergency_mode['filter_relaxation']
         return self.filter_threshold
+
+    def _apply_phase2_selection(self, buy_signals: list, price_map: dict) -> list:
+        """
+        V4.0 Phase 2: Aplica seleção avançada de ativos.
+        Usa padrões técnicos, volume, timing e breakouts.
+        Retorna sinais reordenados e enriquecidos.
+        """
+        if not self.phase2_enabled or not self.ranking_system:
+            return buy_signals
+
+        try:
+            # Verifica timing primeiro
+            timing = self.timing_manager.analyze_timing()
+            system_logger.info(f"\n📊 V4.0 PHASE 2: SELEÇÃO AVANÇADA")
+            system_logger.info(f"   Sessão: {timing.current_session.value}")
+            system_logger.info(f"   Horário ideal: {'✅' if timing.is_optimal else '❌'}")
+            system_logger.info(f"   Confiança: {timing.confidence}")
+
+            enhanced_signals = []
+
+            for crypto in buy_signals[:20]:  # Analisa top 20
+                symbol = crypto['symbol']
+                price = crypto.get('price', price_map.get(symbol, 0))
+
+                # Obtém dados históricos do scanner (se disponível)
+                # Nota: Em produção, buscar df do cache do crypto_scanner
+                df = self._get_crypto_dataframe(symbol)
+
+                if df is None or len(df) < 20:
+                    # Sem dados suficientes, mantém score original
+                    crypto['phase2_score'] = crypto.get('total_score', 50)
+                    crypto['phase2_applied'] = False
+                    enhanced_signals.append(crypto)
+                    continue
+
+                # Calcula score completo Phase 2
+                asset_score = self.ranking_system.calculate_comprehensive_score(
+                    symbol, crypto, df
+                )
+
+                # Enriquece sinal com dados Phase 2
+                crypto['phase2_score'] = asset_score.total_score
+                crypto['phase2_technical'] = asset_score.technical_score
+                crypto['phase2_volume'] = asset_score.volume_score
+                crypto['phase2_pattern'] = asset_score.pattern_score
+                crypto['phase2_timing'] = asset_score.timing_score
+                crypto['phase2_breakout'] = asset_score.breakout_score
+                crypto['phase2_recommendation'] = asset_score.recommendation
+                crypto['phase2_confidence'] = asset_score.confidence
+                crypto['phase2_risk'] = asset_score.risk_level
+                crypto['phase2_rr'] = asset_score.risk_reward
+                crypto['phase2_applied'] = True
+
+                # Ajusta parâmetros se recomendado
+                if asset_score.recommendation in ['STRONG_BUY', 'BUY']:
+                    params = self.ranking_system.get_adjusted_parameters(asset_score)
+                    crypto['phase2_exposure'] = params['exposure']
+                    crypto['phase2_tp'] = params['take_profit']
+                    crypto['phase2_sl'] = params['stop_loss']
+
+                enhanced_signals.append(crypto)
+
+            # Reordena por phase2_score
+            enhanced_signals.sort(key=lambda x: x.get('phase2_score', 0), reverse=True)
+
+            # Log top 5 com Phase 2
+            system_logger.info(f"\n🏆 TOP 5 APÓS PHASE 2:")
+            for i, sig in enumerate(enhanced_signals[:5], 1):
+                p2 = sig.get('phase2_applied', False)
+                if p2:
+                    system_logger.info(
+                        f"   {i}. {sig['symbol']}: P2={sig['phase2_score']:.0f} "
+                        f"(T:{sig.get('phase2_technical', 0):.0f} V:{sig.get('phase2_volume', 0):.0f} "
+                        f"P:{sig.get('phase2_pattern', 0):.0f}) | {sig.get('phase2_recommendation', 'N/A')}"
+                    )
+                else:
+                    system_logger.info(
+                        f"   {i}. {sig['symbol']}: Score={sig.get('total_score', 0):.0f} (P2 não aplicado)"
+                    )
+
+            return enhanced_signals
+
+        except Exception as e:
+            system_logger.warning(f"Erro Phase 2: {e}. Usando seleção padrão.")
+            return buy_signals
+
+    def _get_crypto_dataframe(self, symbol: str):
+        """
+        V4.0 Phase 2: Obtém DataFrame de dados históricos para um símbolo.
+        Usa cache do crypto_scanner se disponível.
+        """
+        try:
+            if self.crypto_scanner and hasattr(self.crypto_scanner, '_cache'):
+                cache = self.crypto_scanner._cache
+                if symbol in cache:
+                    return cache[symbol].get('df')
+
+            # Fallback: busca dados frescos
+            import yfinance as yf
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period='7d', interval='1h')
+            return df if len(df) > 0 else None
+
+        except Exception as e:
+            system_logger.debug(f"Erro obtendo df para {symbol}: {e}")
+            return None
 
     def _log_positions_dashboard(self, price_map: dict):
         """
