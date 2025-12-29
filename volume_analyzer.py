@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from system_logger import system_logger
+from data_utils import normalize_dataframe_columns, safe_get_ohlcv_arrays
 
 
 @dataclass
@@ -81,7 +82,20 @@ class VolumeAnalyzer:
                 'std_20': 0
             }
 
-        volumes = df['volume'].values
+        # V4.1 FIX: Usa extração segura de volume
+        df_norm = normalize_dataframe_columns(df)
+        data = safe_get_ohlcv_arrays(df_norm)
+        volumes = data['volume']
+
+        if len(volumes) == 0:
+            return {
+                'current_volume': 0,
+                'avg_20': 0,
+                'avg_50': 0,
+                'ratio_20': 0,
+                'ratio_50': 0,
+                'std_20': 0
+            }
 
         current_volume = volumes[-1]
         avg_20 = np.mean(volumes[-self.short_period:]) if len(volumes) >= self.short_period else np.mean(volumes)
@@ -107,7 +121,13 @@ class VolumeAnalyzer:
         if len(df) < periods + 5:
             return 'STABLE'
 
-        volumes = df['volume'].values
+        # V4.1 FIX: Usa extração segura de volume
+        df_norm = normalize_dataframe_columns(df)
+        data = safe_get_ohlcv_arrays(df_norm)
+        volumes = data['volume']
+
+        if len(volumes) == 0:
+            return 'STABLE'
 
         # Calcula médias móveis de volume
         recent_avg = np.mean(volumes[-periods:])
@@ -255,13 +275,22 @@ class VolumeAnalyzer:
                     quality='LOW'
                 )
 
+            # V4.1 FIX: Usa extração segura de OHLCV
+            df_norm = normalize_dataframe_columns(df)
+            data = safe_get_ohlcv_arrays(df_norm)
+
             # Estima liquidez como média de volume * preço
-            avg_volume = np.mean(df['volume'].values[-20:])
+            volumes = data['volume']
+            avg_volume = np.mean(volumes[-20:]) if len(volumes) >= 20 else np.mean(volumes) if len(volumes) > 0 else 0
             estimated_liquidity = avg_volume * current_price
 
             # Estima spread baseado na volatilidade do candle
-            recent_candles = df.tail(10)
-            avg_range = np.mean(recent_candles['high'] - recent_candles['low'])
+            highs = data['high']
+            lows = data['low']
+            if len(highs) >= 10 and len(lows) >= 10:
+                avg_range = np.mean(highs[-10:] - lows[-10:])
+            else:
+                avg_range = 0
             spread_estimate = (avg_range / current_price) * 100 if current_price > 0 else 1.0
 
             # Calcula score de liquidez
@@ -376,8 +405,14 @@ class VolumeAnalyzer:
             if len(df) < 20:
                 return {'poc_price': 0, 'value_area_high': 0, 'value_area_low': 0}
 
-            closes = df['close'].values
-            volumes = df['volume'].values
+            # V4.1 FIX: Usa extração segura de OHLCV
+            df_norm = normalize_dataframe_columns(df)
+            data = safe_get_ohlcv_arrays(df_norm)
+            closes = data['close']
+            volumes = data['volume']
+
+            if len(closes) == 0 or len(volumes) == 0:
+                return {'poc_price': 0, 'value_area_high': 0, 'value_area_low': 0}
 
             # Divide o range de preço em níveis
             price_min = np.min(closes)

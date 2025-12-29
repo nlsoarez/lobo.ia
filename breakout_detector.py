@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from system_logger import system_logger
+from data_utils import normalize_dataframe_columns, safe_get_ohlcv_arrays
 
 
 class BreakoutType(Enum):
@@ -69,6 +70,40 @@ class BreakoutDetector:
 
         system_logger.info(f"BreakoutDetector V4.0 inicializado (confirmação: {confirmation_bars} barras)")
 
+    def _get_ohlcv_safe(self, df: pd.DataFrame, lookback: int = None) -> tuple:
+        """
+        Extrai dados OHLCV de forma segura (case-insensitive).
+
+        Args:
+            df: DataFrame com dados
+            lookback: Se especificado, retorna apenas os últimos N valores
+
+        Returns:
+            Tuple (closes, highs, lows, volumes) ou (None, None, None, None) se falhar
+        """
+        try:
+            df_norm = normalize_dataframe_columns(df)
+            data = safe_get_ohlcv_arrays(df_norm)
+
+            closes = data['close']
+            highs = data['high']
+            lows = data['low']
+            volumes = data['volume']
+
+            if len(closes) == 0:
+                return None, None, None, None
+
+            if lookback is not None and lookback < len(closes):
+                closes = closes[-lookback:]
+                highs = highs[-lookback:]
+                lows = lows[-lookback:]
+                volumes = volumes[-lookback:]
+
+            return closes, highs, lows, volumes
+        except Exception as e:
+            system_logger.error(f"Erro extraindo OHLCV: {e}")
+            return None, None, None, None
+
     def find_support_resistance_levels(
         self,
         df: pd.DataFrame,
@@ -81,9 +116,10 @@ class BreakoutDetector:
         if len(df) < lookback:
             return []
 
-        highs = df['high'].values[-lookback:]
-        lows = df['low'].values[-lookback:]
-        closes = df['close'].values[-lookback:]
+        # V4.1 FIX: Usa extração segura de OHLCV
+        closes, highs, lows, _ = self._get_ohlcv_safe(df, lookback)
+        if closes is None:
+            return []
 
         levels = []
 
@@ -189,10 +225,10 @@ class BreakoutDetector:
             return self._empty_result()
 
         try:
-            closes = df['close'].values
-            highs = df['high'].values
-            lows = df['low'].values
-            volumes = df['volume'].values
+            # V4.1 FIX: Usa extração segura de OHLCV
+            closes, highs, lows, volumes = self._get_ohlcv_safe(df)
+            if closes is None:
+                return self._empty_result()
             current_price = closes[-1]
 
             # Se níveis não fornecidos, encontra automaticamente
@@ -316,8 +352,10 @@ class BreakoutDetector:
         """
         Cria resultado de breakout com targets e scores.
         """
-        closes = df['close'].values
-        volumes = df['volume'].values
+        # V4.1 FIX: Usa extração segura de OHLCV
+        closes, _, _, volumes = self._get_ohlcv_safe(df)
+        if closes is None:
+            return self._empty_result()
         current_price = closes[-1]
 
         # Verifica confirmação de volume
@@ -381,7 +419,10 @@ class BreakoutDetector:
         """
         Calcula força do breakout (0-100).
         """
-        closes = df['close'].values
+        # V4.1 FIX: Usa extração segura de OHLCV
+        closes, _, _, _ = self._get_ohlcv_safe(df)
+        if closes is None or len(closes) == 0:
+            return 0
         current_price = closes[-1]
 
         # Distância do nível (40%)
@@ -437,15 +478,20 @@ class BreakoutDetector:
             return self._empty_result()
 
         try:
-            # Define o range das últimas N barras
-            range_data = df.iloc[-(range_periods + 5):-5]
-            recent_data = df.iloc[-5:]
+            # V4.1 FIX: Usa extração segura de OHLCV
+            closes, highs, lows, _ = self._get_ohlcv_safe(df)
+            if closes is None:
+                return self._empty_result()
 
-            range_high = range_data['high'].max()
-            range_low = range_data['low'].min()
+            # Define o range das últimas N barras
+            range_highs = highs[-(range_periods + 5):-5]
+            range_lows = lows[-(range_periods + 5):-5]
+
+            range_high = np.max(range_highs)
+            range_low = np.min(range_lows)
             range_size = range_high - range_low
 
-            current_price = df['close'].iloc[-1]
+            current_price = closes[-1]
 
             # Verifica breakout do range
             if current_price > range_high * 1.002:
@@ -481,7 +527,10 @@ class BreakoutDetector:
         if len(df) < 5:
             return False
 
-        closes = df['close'].values
+        # V4.1 FIX: Usa extração segura de OHLCV
+        closes, _, _, _ = self._get_ohlcv_safe(df)
+        if closes is None or len(closes) < 5:
+            return False
         current_price = closes[-1]
 
         if breakout_type == BreakoutType.RESISTANCE_BREAK:
