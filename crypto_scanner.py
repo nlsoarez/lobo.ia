@@ -22,14 +22,14 @@ except ImportError:
     HAS_CMC = False
 
 
-# Lista de criptomoedas suportadas (Yahoo Finance usa -USD)
-# Nota: MATIC-USD, UNI-USD e APT-USD foram substituidas por nao funcionarem no Yahoo Finance
+# V4.0: Lista expandida de 50 criptomoedas para trading agressivo
+# Yahoo Finance format: SYMBOL-USD
 CRYPTOCURRENCIES = {
-    # Principais
+    # === TIER 1: MAJORS (liquidez máxima) ===
     'BTC-USD': {'name': 'Bitcoin', 'category': 'major'},
     'ETH-USD': {'name': 'Ethereum', 'category': 'major'},
 
-    # Top 10
+    # === TIER 2: TOP 10 (alta liquidez) ===
     'BNB-USD': {'name': 'Binance Coin', 'category': 'top10'},
     'XRP-USD': {'name': 'Ripple', 'category': 'top10'},
     'SOL-USD': {'name': 'Solana', 'category': 'top10'},
@@ -37,23 +37,53 @@ CRYPTOCURRENCIES = {
     'DOGE-USD': {'name': 'Dogecoin', 'category': 'top10'},
     'AVAX-USD': {'name': 'Avalanche', 'category': 'top10'},
     'DOT-USD': {'name': 'Polkadot', 'category': 'top10'},
-    'TRX-USD': {'name': 'Tron', 'category': 'top10'},  # Substituiu MATIC
+    'TRX-USD': {'name': 'Tron', 'category': 'top10'},
 
-    # DeFi
-    'LINK-USD': {'name': 'Chainlink', 'category': 'defi'},
-    'MKR-USD': {'name': 'Maker', 'category': 'defi'},  # Substituiu UNI
-    'AAVE-USD': {'name': 'Aave', 'category': 'defi'},
+    # === TIER 3: TOP 20 (boa liquidez) ===
+    'SHIB-USD': {'name': 'Shiba Inu', 'category': 'top20'},
+    'TON-USD': {'name': 'Toncoin', 'category': 'top20'},
+    'LINK-USD': {'name': 'Chainlink', 'category': 'top20'},
+    'BCH-USD': {'name': 'Bitcoin Cash', 'category': 'top20'},
+    'XLM-USD': {'name': 'Stellar', 'category': 'top20'},
+    'LTC-USD': {'name': 'Litecoin', 'category': 'top20'},
+    'UNI-USD': {'name': 'Uniswap', 'category': 'top20'},
+    'LEO-USD': {'name': 'UNUS SED LEO', 'category': 'top20'},
+    'ATOM-USD': {'name': 'Cosmos', 'category': 'top20'},
+    'ETC-USD': {'name': 'Ethereum Classic', 'category': 'top20'},
 
-    # Layer 2
-    'ARB-USD': {'name': 'Arbitrum', 'category': 'layer2'},
-    'OP-USD': {'name': 'Optimism', 'category': 'layer2'},
+    # === TIER 4: TOP 30-50 (média liquidez) ===
+    'NEAR-USD': {'name': 'NEAR Protocol', 'category': 'top50'},
+    'ICP-USD': {'name': 'Internet Computer', 'category': 'top50'},
+    'FIL-USD': {'name': 'Filecoin', 'category': 'top50'},
+    'AAVE-USD': {'name': 'Aave', 'category': 'top50'},
+    'ARB-USD': {'name': 'Arbitrum', 'category': 'top50'},
+    'OP-USD': {'name': 'Optimism', 'category': 'top50'},
+    'MKR-USD': {'name': 'Maker', 'category': 'top50'},
+    'VET-USD': {'name': 'VeChain', 'category': 'top50'},
+    'GRT-USD': {'name': 'The Graph', 'category': 'top50'},
+    'ALGO-USD': {'name': 'Algorand', 'category': 'top50'},
+    'FTM-USD': {'name': 'Fantom', 'category': 'top50'},
+    'THETA-USD': {'name': 'Theta Network', 'category': 'top50'},
+    'SAND-USD': {'name': 'The Sandbox', 'category': 'top50'},
+    'MANA-USD': {'name': 'Decentraland', 'category': 'top50'},
+    'AXS-USD': {'name': 'Axie Infinity', 'category': 'top50'},
+    'EGLD-USD': {'name': 'MultiversX', 'category': 'top50'},
+    'EOS-USD': {'name': 'EOS', 'category': 'top50'},
+    'FLOW-USD': {'name': 'Flow', 'category': 'top50'},
+    'XTZ-USD': {'name': 'Tezos', 'category': 'top50'},
+    'CHZ-USD': {'name': 'Chiliz', 'category': 'top50'},
 
-    # Outras
-    'ATOM-USD': {'name': 'Cosmos', 'category': 'other'},
-    'LTC-USD': {'name': 'Litecoin', 'category': 'other'},
-    'FIL-USD': {'name': 'Filecoin', 'category': 'other'},
-    'XLM-USD': {'name': 'Stellar', 'category': 'other'},  # Substituiu APT
-    'NEAR-USD': {'name': 'NEAR Protocol', 'category': 'other'},
+    # === TIER 5: DEFI & GAMING (alta volatilidade) ===
+    'CRV-USD': {'name': 'Curve DAO', 'category': 'defi'},
+    'LDO-USD': {'name': 'Lido DAO', 'category': 'defi'},
+    'SNX-USD': {'name': 'Synthetix', 'category': 'defi'},
+    'COMP-USD': {'name': 'Compound', 'category': 'defi'},
+    'SUSHI-USD': {'name': 'SushiSwap', 'category': 'defi'},
+    'ENJ-USD': {'name': 'Enjin Coin', 'category': 'gaming'},
+    'GALA-USD': {'name': 'Gala', 'category': 'gaming'},
+    'IMX-USD': {'name': 'Immutable X', 'category': 'gaming'},
+    'APE-USD': {'name': 'ApeCoin', 'category': 'gaming'},
+    'RNDR-USD': {'name': 'Render', 'category': 'ai'},
 }
 
 
@@ -64,15 +94,15 @@ class CryptoScanner:
     """
 
     def __init__(self):
-        """Inicializa o scanner de criptomoedas."""
+        """V4.0: Scanner agressivo para 50 criptomoedas."""
         crypto_config = config.get('crypto', {})
 
         self.enabled = crypto_config.get('enabled', True)
         self.symbols = crypto_config.get('symbols', ['BTC-USD', 'ETH-USD'])
-        self.top_n = crypto_config.get('top_coins', 10)
-        self.max_workers = crypto_config.get('max_workers', 5)
-        self.interval = crypto_config.get('interval', '1h')  # Cripto usa intervalos maiores
-        self.period = crypto_config.get('period', '30d')  # 30d para ter dados suficientes para EMA 200
+        self.top_n = crypto_config.get('top_coins', 20)  # V4.0: Aumentado de 10 para 20
+        self.max_workers = crypto_config.get('max_workers', 10)  # V4.0: Aumentado de 5 para 10
+        self.interval = crypto_config.get('interval', '1h')
+        self.period = crypto_config.get('period', '30d')
 
         # Pesos para ranking
         self.weights = crypto_config.get('weights', {
@@ -83,10 +113,10 @@ class CryptoScanner:
             'momentum_score': 0.10,
         })
 
-        # Cache
+        # V4.0: Cache reduzido para 3 minutos (era 5)
         self._cache = {}
         self._cache_time = None
-        self._cache_duration = timedelta(minutes=crypto_config.get('cache_minutes', 5))
+        self._cache_duration = timedelta(minutes=crypto_config.get('cache_minutes', 3))
 
         # CoinMarketCap client (dados em tempo real mais precisos)
         self.cmc_enabled = HAS_CMC
