@@ -55,6 +55,12 @@ try:
 except ImportError:
     BRAZIL_TZ = timezone(timedelta(hours=-3))
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
+
 
 # ==================== PROFESSIONAL CSS ====================
 
@@ -608,8 +614,8 @@ def render_recent_trades():
         """, unsafe_allow_html=True)
         return
 
-    # Build table HTML
-    rows_html = ""
+    # Build DataFrame for display
+    data = []
     for trade in trades[:10]:
         symbol = trade.get('symbol', 'N/A')
         action = trade.get('action', 'N/A')
@@ -628,42 +634,52 @@ def render_recent_trades():
         else:
             date_str = str(date)[:16] if date else 'N/A'
 
-        action_class = 'tx-buy' if action == 'BUY' else 'tx-sell'
-        profit_html = ""
+        # Format profit
         if action == 'SELL' and profit != 0:
-            profit_color = '#3fb950' if profit > 0 else '#f85149'
-            profit_html = f'<span style="color: {profit_color};">{"+$" if profit > 0 else "-$"}{abs(profit):.2f}</span>'
+            profit_str = f"+${profit:.2f}" if profit > 0 else f"-${abs(profit):.2f}"
+        else:
+            profit_str = "-"
 
-        rows_html += f"""
-        <tr>
-            <td style="font-weight: 600;">{symbol}</td>
-            <td class="{action_class}">{action}</td>
-            <td style="font-family: 'JetBrains Mono', monospace;">${price:.4f}</td>
-            <td>{quantity:.4f}</td>
-            <td>{profit_html}</td>
-            <td style="color: #8b949e;">{date_str}</td>
-        </tr>
-        """
+        data.append({
+            'Ativo': symbol,
+            'Tipo': action,
+            'Preço': f"${price:.4f}",
+            'Qtd': f"{quantity:.4f}",
+            'Resultado': profit_str,
+            'Data': date_str
+        })
 
-    st.markdown(f"""
-    <div style="overflow-x: auto;">
-        <table class="tx-table">
-            <thead>
-                <tr>
-                    <th>Ativo</th>
-                    <th>Tipo</th>
-                    <th>Preço</th>
-                    <th>Quantidade</th>
-                    <th>Resultado</th>
-                    <th>Data</th>
-                </tr>
-            </thead>
-            <tbody>
-                {rows_html}
-            </tbody>
-        </table>
-    </div>
-    """, unsafe_allow_html=True)
+    if data:
+        df = pd.DataFrame(data)
+
+        # Style function for coloring
+        def style_row(row):
+            styles = [''] * len(row)
+            # Color the Tipo column
+            if row['Tipo'] == 'BUY':
+                styles[1] = 'color: #3fb950; font-weight: 600'
+            elif row['Tipo'] == 'SELL':
+                styles[1] = 'color: #f85149; font-weight: 600'
+            # Color the Resultado column
+            if row['Resultado'].startswith('+'):
+                styles[4] = 'color: #3fb950; font-weight: 600'
+            elif row['Resultado'].startswith('-') and row['Resultado'] != '-':
+                styles[4] = 'color: #f85149; font-weight: 600'
+            return styles
+
+        styled_df = df.style.apply(style_row, axis=1)
+        styled_df = styled_df.set_properties(**{
+            'background-color': '#161b22',
+            'color': '#f0f6fc',
+            'border-color': '#30363d'
+        })
+
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            hide_index=True,
+            height=400
+        )
 
 
 def render_performance_stats():
@@ -861,11 +877,59 @@ def render_actions():
         )
 
 
+# ==================== AUTO REFRESH ====================
+
+def setup_auto_refresh(interval_seconds=30):
+    """Setup automatic page refresh."""
+    if HAS_AUTOREFRESH:
+        # Use streamlit-autorefresh component
+        count = st_autorefresh(interval=interval_seconds * 1000, limit=None, key="auto_refresh")
+
+    # Show refresh indicator
+    st.markdown(f"""
+    <style>
+        .refresh-indicator {{
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: #21262d;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            color: #8b949e;
+            border: 1px solid #30363d;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .refresh-dot {{
+            width: 6px;
+            height: 6px;
+            background: #3fb950;
+            border-radius: 50%;
+            animation: blink 1s ease-in-out infinite;
+        }}
+        @keyframes blink {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.3; }}
+        }}
+    </style>
+    <div class="refresh-indicator">
+        <span class="refresh-dot"></span>
+        Auto-refresh: {interval_seconds}s
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # ==================== MAIN ====================
 
 def main():
     """Main application."""
     apply_professional_css()
+
+    # Auto refresh (30 seconds)
+    setup_auto_refresh(30)
 
     # Header
     render_header()
