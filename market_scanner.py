@@ -15,6 +15,59 @@ from config_loader import config
 from system_logger import system_logger
 
 
+def get_close_column(df):
+    """
+    Retorna a coluna de preço de fechamento (case-insensitive).
+    Resolve problema 'Close' vs 'close'.
+    """
+    if df is None or df.empty:
+        return None
+
+    for col in ['Close', 'close', 'CLOSE', 'last', 'Last']:
+        if col in df.columns:
+            return df[col]
+
+    # Fallback case-insensitive
+    for col in df.columns:
+        if isinstance(col, str) and col.lower() == 'close':
+            return df[col]
+
+    return None
+
+
+def get_volume_column(df):
+    """Retorna a coluna de volume (case-insensitive)."""
+    if df is None or df.empty:
+        return None
+
+    for col in ['Volume', 'volume', 'VOLUME']:
+        if col in df.columns:
+            return df[col]
+    return None
+
+
+def get_high_column(df):
+    """Retorna a coluna high (case-insensitive)."""
+    if df is None or df.empty:
+        return None
+
+    for col in ['High', 'high', 'HIGH']:
+        if col in df.columns:
+            return df[col]
+    return None
+
+
+def get_low_column(df):
+    """Retorna a coluna low (case-insensitive)."""
+    if df is None or df.empty:
+        return None
+
+    for col in ['Low', 'low', 'LOW']:
+        if col in df.columns:
+            return df[col]
+    return None
+
+
 # Lista de ações da B3 (principais + small caps)
 # Atualizada periodicamente - inclui ações do Ibovespa e outras líquidas
 B3_STOCKS = [
@@ -185,11 +238,19 @@ class MarketScanner:
             if hist.empty or len(hist) < 20:
                 return None
 
-            # Verifica filtros básicos
-            current_price = hist['Close'].iloc[-1]
-            avg_volume = hist['Volume'].mean()
+            # V4.0: Obtém colunas de forma segura (case-insensitive)
+            close_col = get_close_column(hist)
+            volume_col = get_volume_column(hist)
 
-            if current_price < self.min_price or current_price > self.max_price:
+            if close_col is None:
+                system_logger.debug(f"{symbol}: Coluna 'close' não encontrada")
+                return None
+
+            # Verifica filtros básicos
+            current_price = close_col.iloc[-1]
+            avg_volume = volume_col.mean() if volume_col is not None else 0
+
+            if pd.isna(current_price) or current_price < self.min_price or current_price > self.max_price:
                 return None
 
             if avg_volume < self.min_volume:
@@ -231,10 +292,22 @@ class MarketScanner:
     def _calculate_indicators(self, hist: pd.DataFrame) -> Optional[Dict[str, float]]:
         """Calcula indicadores técnicos."""
         try:
-            close = hist['Close']
-            high = hist['High']
-            low = hist['Low']
-            volume = hist['Volume']
+            # V4.0: Obtém colunas de forma segura (case-insensitive)
+            close = get_close_column(hist)
+            high = get_high_column(hist)
+            low = get_low_column(hist)
+            volume = get_volume_column(hist)
+
+            if close is None:
+                return None
+
+            # Fallbacks se colunas não existirem
+            if high is None:
+                high = close
+            if low is None:
+                low = close
+            if volume is None:
+                volume = pd.Series([0] * len(close), index=close.index)
 
             # RSI
             rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
@@ -332,7 +405,8 @@ class MarketScanner:
             scores['volume_score'] = vol_ratio * 60
 
         # Trend Score (0-100)
-        price = hist['Close'].iloc[-1]
+        close_col = get_close_column(hist)
+        price = close_col.iloc[-1] if close_col is not None else 0
         ema_9 = analysis['ema_9']
         ema_21 = analysis['ema_21']
         ema_50 = analysis['ema_50']
@@ -392,10 +466,14 @@ class MarketScanner:
         if len(hist) < days + 1:
             return 0.0
 
-        current = hist['Close'].iloc[-1]
-        past = hist['Close'].iloc[-days-1]
+        close_col = get_close_column(hist)
+        if close_col is None:
+            return 0.0
 
-        if past == 0:
+        current = close_col.iloc[-1]
+        past = close_col.iloc[-days-1]
+
+        if pd.isna(past) or past == 0:
             return 0.0
 
         return ((current - past) / past) * 100
