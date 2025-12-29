@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from system_logger import system_logger
+from data_utils import get_close_column, normalize_dataframe_columns
 
 # Importa módulos da Fase 2
 from technical_pattern_scanner import TechnicalPatternScanner
@@ -226,7 +227,10 @@ class AssetRankingSystem:
         Calcula score completo para um ativo.
         """
         try:
-            price = crypto_data.get('price', df['close'].iloc[-1] if len(df) > 0 else 0)
+            # V4.1 FIX: Usa extração segura da coluna close
+            close_col = get_close_column(df)
+            default_price = close_col.iloc[-1] if close_col is not None and len(close_col) > 0 else 0
+            price = crypto_data.get('price', default_price)
 
             # Calcula scores individuais
             technical_score = self.calculate_technical_score(crypto_data)

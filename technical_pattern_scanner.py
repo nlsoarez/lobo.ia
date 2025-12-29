@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from system_logger import system_logger
+from data_utils import normalize_dataframe_columns, safe_get_ohlcv_arrays, validate_ohlcv_data
 
 
 class PatternType(Enum):
@@ -64,6 +65,33 @@ class TechnicalPatternScanner:
 
         system_logger.info("TechnicalPatternScanner V4.0 inicializado")
 
+    def _get_ohlcv_safe(self, df: pd.DataFrame) -> tuple:
+        """
+        Extrai dados OHLCV de forma segura (case-insensitive).
+
+        Returns:
+            Tuple (prices, highs, lows, volumes) ou (None, None, None, None) se falhar
+        """
+        try:
+            # Normaliza colunas para lowercase
+            df_norm = normalize_dataframe_columns(df)
+
+            # Valida dados
+            validation = validate_ohlcv_data(df_norm)
+            if not validation['valid']:
+                return None, None, None, None
+
+            # Extrai arrays
+            data = safe_get_ohlcv_arrays(df_norm)
+
+            if len(data['close']) == 0:
+                return None, None, None, None
+
+            return data['close'], data['high'], data['low'], data['volume']
+        except Exception as e:
+            system_logger.error(f"Erro extraindo OHLCV: {e}")
+            return None, None, None, None
+
     def detect_bull_flag(self, df: pd.DataFrame, min_score: int = 70) -> PatternResult:
         """
         Detecta padrão Bull Flag:
@@ -80,11 +108,14 @@ class TechnicalPatternScanner:
             )
 
         try:
-            # Encontra o polo (movimento forte de alta)
-            prices = df['close'].values
-            highs = df['high'].values
-            lows = df['low'].values
-            volumes = df['volume'].values
+            # V4.1 FIX: Usa extração segura de OHLCV
+            prices, highs, lows, volumes = self._get_ohlcv_safe(df)
+            if prices is None:
+                return PatternResult(
+                    detected=False, pattern_type=PatternType.BULL_FLAG,
+                    score=0, entry_price=0, target_price=0, stop_loss=0,
+                    risk_reward=0, confidence='LOW', description='Erro ao extrair dados OHLCV'
+                )
 
             # Procura movimento de alta de 5%+ nas últimas 20 barras
             pole_found = False
@@ -213,10 +244,14 @@ class TechnicalPatternScanner:
             )
 
         try:
-            highs = df['high'].values
-            lows = df['low'].values
-            closes = df['close'].values
-            volumes = df['volume'].values
+            # V4.1 FIX: Usa extração segura de OHLCV
+            closes, highs, lows, volumes = self._get_ohlcv_safe(df)
+            if closes is None:
+                return PatternResult(
+                    detected=False, pattern_type=PatternType.ASCENDING_TRIANGLE,
+                    score=0, entry_price=0, target_price=0, stop_loss=0,
+                    risk_reward=0, confidence='LOW', description='Erro ao extrair dados OHLCV'
+                )
 
             # Encontra topos (resistência horizontal)
             peaks = []
@@ -336,10 +371,14 @@ class TechnicalPatternScanner:
             )
 
         try:
-            highs = df['high'].values
-            lows = df['low'].values
-            closes = df['close'].values
-            volumes = df['volume'].values
+            # V4.1 FIX: Usa extração segura de OHLCV
+            closes, highs, lows, volumes = self._get_ohlcv_safe(df)
+            if closes is None:
+                return PatternResult(
+                    detected=False, pattern_type=PatternType.DOUBLE_BOTTOM,
+                    score=0, entry_price=0, target_price=0, stop_loss=0,
+                    risk_reward=0, confidence='LOW', description='Erro ao extrair dados OHLCV'
+                )
 
             # Encontra os dois fundos mais baixos recentes
             window = min(30, len(df) - 5)
@@ -447,9 +486,14 @@ class TechnicalPatternScanner:
             )
 
         try:
-            highs = df['high'].values
-            lows = df['low'].values
-            closes = df['close'].values
+            # V4.1 FIX: Usa extração segura de OHLCV
+            closes, highs, lows, _ = self._get_ohlcv_safe(df)
+            if closes is None:
+                return PatternResult(
+                    detected=False, pattern_type=PatternType.SYMMETRICAL_TRIANGLE,
+                    score=0, entry_price=0, target_price=0, stop_loss=0,
+                    risk_reward=0, confidence='LOW', description='Erro ao extrair dados OHLCV'
+                )
 
             # Encontra topos
             peaks = []

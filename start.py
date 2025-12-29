@@ -371,14 +371,42 @@ class LoboSystem:
         self.hours_without_entry = 0
 
         # =====================================================
-        # V4.0: LIMITES DIÁRIOS DE SEGURANÇA
+        # V4.1: LIMITES DIÁRIOS DE SEGURANÇA COM CIRCUIT BREAKERS GRADUAIS
         # =====================================================
         self.daily_limits = {
             'target_profit': 0.05,      # Meta: +5% diário
             'max_profit': 0.10,         # Parar em +10%
             'max_loss': -0.03,          # Parar em -3%
             'max_trades': 20,           # Máximo 20 trades/dia
-            'consecutive_losses_pause': 3,  # Pausa após 3 perdas seguidas
+            'consecutive_losses_pause': 6,  # Pausa total apenas após 6 perdas
+        }
+
+        # V4.1: CIRCUIT BREAKERS GRADUAIS
+        self.circuit_breakers = {
+            'levels': [
+                {'losses': 2, 'action': 'reduce_25', 'multiplier': 0.75},   # 2 perdas → -25% exposição
+                {'losses': 3, 'action': 'reduce_50', 'multiplier': 0.50},   # 3 perdas → -50% exposição
+                {'losses': 4, 'action': 'pause_5min', 'pause_minutes': 5},  # 4 perdas → pausa 5min
+                {'losses': 5, 'action': 'pause_15min', 'pause_minutes': 15},# 5 perdas → pausa 15min
+                {'losses': 6, 'action': 'stop', 'stop': True},              # 6 perdas → para
+            ],
+            'current_level': 0,
+            'exposure_multiplier': 1.0,
+            'pause_until': None,
+            'recovery_wins': 2,  # Wins necessários para resetar
+        }
+
+        # V4.1: AJUSTES PARA MERCADO LATERAL
+        self.market_regime = {
+            'current': 'unknown',  # bullish, bearish, lateral
+            'lateral_adjustments': {
+                'min_signal_strength': 0.7,    # Sinal mais forte necessário
+                'reduce_position_size': 0.5,    # -50% tamanho
+                'increase_tp': 1.5,             # +50% take profit
+                'decrease_sl': 0.75,            # -25% stop loss
+                'max_positions': 2,             # Máximo 2 posições
+            },
+            'detection_enabled': True,
         }
 
         # V4.0: TRACKING DIÁRIO
@@ -712,9 +740,74 @@ class LoboSystem:
             self.daily_stats['limit_reached'] = True
             system_logger.warning(f"\n🛑 PERDA MÁXIMA ATINGIDA: {pct*100:+.2f}% - Parando operações")
 
+    def _check_circuit_breakers(self) -> tuple:
+        """
+        V4.1: Verifica circuit breakers graduais.
+        Returns: (can_trade, exposure_multiplier, message)
+        """
+        losses = self.daily_stats.get('consecutive_losses', 0)
+        now = get_brazil_time()
+
+        # Verifica se está em pausa
+        pause_until = self.circuit_breakers.get('pause_until')
+        if pause_until and now < pause_until:
+            remaining = (pause_until - now).total_seconds() / 60
+            return False, 0, f"Em pausa por circuit breaker ({remaining:.0f}min restantes)"
+
+        # Reseta se pausa expirou
+        if pause_until and now >= pause_until:
+            self.circuit_breakers['pause_until'] = None
+            system_logger.info("✅ Pausa de circuit breaker expirada - Retomando operações")
+
+        # Encontra o nível de circuit breaker atual
+        current_level = None
+        for level in self.circuit_breakers['levels']:
+            if losses >= level['losses']:
+                current_level = level
+
+        if current_level is None:
+            self.circuit_breakers['exposure_multiplier'] = 1.0
+            return True, 1.0, "Operação normal"
+
+        # Aplica ação do circuit breaker
+        action = current_level['action']
+
+        if 'reduce' in action:
+            multiplier = current_level.get('multiplier', 0.5)
+            self.circuit_breakers['exposure_multiplier'] = multiplier
+            return True, multiplier, f"CB ativo: {action} (exposição {multiplier*100:.0f}%)"
+
+        elif 'pause' in action:
+            pause_minutes = current_level.get('pause_minutes', 5)
+            self.circuit_breakers['pause_until'] = now + timedelta(minutes=pause_minutes)
+            system_logger.warning(f"🚨 CIRCUIT BREAKER: {losses} perdas → Pausa de {pause_minutes}min")
+            return False, 0, f"CB: Pausa de {pause_minutes}min ativada"
+
+        elif current_level.get('stop'):
+            system_logger.warning(f"🛑 CIRCUIT BREAKER: {losses} perdas → Operações suspensas")
+            return False, 0, "CB: Operações suspensas"
+
+        return True, 1.0, "Operação normal"
+
+    def _on_trade_result(self, is_win: bool):
+        """
+        V4.1: Atualiza estatísticas após resultado de trade.
+        Gerencia circuit breakers e recuperação.
+        """
+        if is_win:
+            self.daily_stats['wins_today'] += 1
+            self.daily_stats['consecutive_losses'] = 0
+            # Reseta circuit breaker após wins consecutivos
+            self.circuit_breakers['exposure_multiplier'] = 1.0
+            self.circuit_breakers['pause_until'] = None
+        else:
+            self.daily_stats['losses_today'] += 1
+            self.daily_stats['consecutive_losses'] += 1
+
     def _check_daily_limits(self) -> bool:
         """
-        V4.0: Verifica se pode continuar operando baseado nos limites diários.
+        V4.1: Verifica se pode continuar operando baseado nos limites diários.
+        Inclui circuit breakers graduais.
         Returns: True se pode operar, False se deve parar.
         """
         self._check_daily_reset()
@@ -728,13 +821,14 @@ class LoboSystem:
             system_logger.info(f"⚠️ Máximo de trades diários atingido ({self.daily_limits['max_trades']})")
             return False
 
-        # Verifica perdas consecutivas
-        if self.daily_stats['consecutive_losses'] >= self.daily_limits['consecutive_losses_pause']:
-            system_logger.warning(
-                f"⚠️ {self.daily_stats['consecutive_losses']} perdas consecutivas - "
-                f"Pausando por segurança"
-            )
+        # V4.1: Verifica circuit breakers graduais
+        can_trade, exposure_mult, message = self._check_circuit_breakers()
+        if not can_trade:
+            system_logger.warning(f"⚠️ Circuit breaker: {message}")
             return False
+
+        # Atualiza multiplicador de exposição
+        self.circuit_breakers['exposure_multiplier'] = exposure_mult
 
         return True
 
@@ -1338,20 +1432,23 @@ class LoboSystem:
 
     def _check_stale_positions(self, price_map: dict) -> list:
         """
-        V3.1: Detecta e fecha posições estagnadas (timeout).
+        V4.1: Detecta e fecha posições estagnadas (timeout).
+        Inclui fechamento forçado para ativos na blacklist.
         Retorna lista de posições fechadas.
         """
         now = get_brazil_time()
         closed_positions = []
 
+        # V4.1: Importa blacklist para verificação
+        try:
+            from crypto_scanner import CRYPTO_BLACKLIST
+        except ImportError:
+            CRYPTO_BLACKLIST = set()
+
         for symbol, position in list(self.crypto_positions.items()):
             current_price = price_map.get(symbol, 0)
-            if current_price <= 0:
-                continue
-
             entry_price = position['entry_price']
             entry_time = position.get('entry_time', now)
-            pnl_pct = (current_price - entry_price) / entry_price
 
             # Calcula tempo aberto
             try:
@@ -1362,7 +1459,35 @@ class LoboSystem:
             except:
                 open_hours = 0
 
-            # Verifica timeout
+            # V4.1 FIX: Fecha forçadamente ativos na blacklist (sem dados)
+            if symbol in CRYPTO_BLACKLIST:
+                system_logger.warning(
+                    f"🚫 BLACKLIST: {symbol} está na blacklist - Fechando forçadamente!"
+                )
+                # Usa preço de entrada como fallback se não houver preço atual
+                close_price = current_price if current_price > 0 else entry_price
+                self._close_crypto_position(symbol, close_price, 'BLACKLIST_FORCE_CLOSE')
+                closed_positions.append(symbol)
+                continue
+
+            # V4.1 FIX: Timeout forçado após 2h (independente do P&L)
+            if open_hours >= 2.0:
+                system_logger.warning(
+                    f"🚨 TIMEOUT FORÇADO: {symbol} aberta há {open_hours:.1f}h - Fechando!"
+                )
+                close_price = current_price if current_price > 0 else entry_price
+                self._close_crypto_position(symbol, close_price, f'FORCED_TIMEOUT_{open_hours:.0f}H')
+                closed_positions.append(symbol)
+                continue
+
+            # Se não há preço atual, pula para próxima iteração
+            if current_price <= 0:
+                system_logger.warning(f"⚠️ {symbol}: Sem preço atual disponível")
+                continue
+
+            pnl_pct = (current_price - entry_price) / entry_price
+
+            # Verifica timeout normal
             if open_hours >= self.position_timeout_hours:
                 # Só fecha se P&L > limite mínimo
                 if pnl_pct >= self.stale_position_min_pnl:
@@ -1375,7 +1500,7 @@ class LoboSystem:
                 else:
                     system_logger.info(
                         f"⏰ {symbol}: Timeout mas P&L {pnl_pct*100:.2f}% < {self.stale_position_min_pnl*100:.1f}% "
-                        f"- Mantendo posição"
+                        f"- Mantendo posição (máx 2h)"
                     )
 
         return closed_positions
