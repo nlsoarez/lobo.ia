@@ -2386,9 +2386,53 @@ class LoboSystem:
         system_logger.info("Sistema encerrado com sucesso")
 
 
+def reset_database():
+    """Reseta todos os dados do banco para nova medição."""
+    print("\n" + "=" * 60)
+    print("🔄 RESET COMPLETO - Lobo IA")
+    print("=" * 60)
+
+    try:
+        logger = Logger()
+        cursor = logger.conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM trades")
+        trades_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM crypto_positions")
+        positions_count = cursor.fetchone()[0]
+
+        print(f"\n📊 Dados encontrados:")
+        print(f"   - Trades: {trades_count}")
+        print(f"   - Posições: {positions_count}")
+
+        print("\n🗑️ Limpando banco de dados...")
+        cursor.execute("DELETE FROM crypto_positions")
+        cursor.execute("DELETE FROM trades")
+        logger.conn.commit()
+
+        print("✅ Banco de dados resetado!")
+        print("   - 0 posições abertas")
+        print("   - 0 trades históricos")
+        print("   - $1000.00 capital inicial")
+        print("=" * 60 + "\n")
+
+        logger.close()
+        return True
+
+    except Exception as e:
+        print(f"❌ Erro no reset: {e}")
+        return False
+
+
 def main():
     """Função principal - ponto de entrada."""
     try:
+        # Verifica se deve resetar dados
+        if os.environ.get('RESET_DATA', '').lower() in ('1', 'true', 'yes'):
+            system_logger.warning("🔄 RESET_DATA detectado - Limpando banco...")
+            reset_database()
+
         # Banner
         print("\n" + "=" * 60)
         print("🐺  LOBO IA - Sistema de Trading Autônomo")
