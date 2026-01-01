@@ -1381,7 +1381,7 @@ class LoboSystem:
             max_price = position.get('max_price', entry_price)
 
             # Calcula métricas
-            if current_price > 0:
+            if current_price > 0 and entry_price > 0:
                 pnl_pct = (current_price - entry_price) / entry_price * 100
                 pnl_usd = position['trade_value'] * (pnl_pct / 100)
             else:
@@ -1480,9 +1480,13 @@ class LoboSystem:
                 closed_positions.append(symbol)
                 continue
 
-            # Se não há preço atual, pula para próxima iteração
+            # Se não há preço atual ou entry_price, pula para próxima iteração
             if current_price <= 0:
                 system_logger.warning(f"⚠️ {symbol}: Sem preço atual disponível")
+                continue
+
+            if entry_price <= 0:
+                system_logger.warning(f"⚠️ {symbol}: Entry price inválido ({entry_price})")
                 continue
 
             pnl_pct = (current_price - entry_price) / entry_price
@@ -1524,6 +1528,10 @@ class LoboSystem:
                 continue
 
             entry_price = position['entry_price']
+            if entry_price <= 0:
+                system_logger.warning(f"⚠️ {symbol}: Entry price inválido ({entry_price}), pulando...")
+                continue
+
             max_price = position.get('max_price', entry_price)
             pnl_pct = (current_price - entry_price) / entry_price
 
@@ -1963,6 +1971,9 @@ class LoboSystem:
                 continue
 
             entry_price = position['entry_price']
+            if entry_price <= 0:
+                continue
+
             pnl_pct = (current_price - entry_price) / entry_price
 
             if pnl_pct < worst_pnl:
@@ -2277,7 +2288,7 @@ class LoboSystem:
         entry_value = float(position['trade_value'])
         exit_value = quantity * current_price
         profit = float(exit_value - entry_value)
-        pnl_pct = float((current_price - entry_price) / entry_price * 100)
+        pnl_pct = float((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0.0
 
         # V3.0: Dados extras da posição
         signal_level = position.get('signal_level', 'N/A')
