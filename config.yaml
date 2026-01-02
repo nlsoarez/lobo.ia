@@ -33,7 +33,7 @@ scanner:
     volatility_score: 0.15  # Score de volatilidade
     momentum_score: 0.10    # Score de momentum
 
-# Configuracoes de Trading
+# Configuracoes de Trading V4.1
 trading:
   # Simbolos fallback (usado apenas se scanner estiver desativado)
   symbols:
@@ -44,11 +44,21 @@ trading:
   # Capital inicial em R$
   capital: 10000.0
 
-  # Exposição por operação (% do capital)
-  exposure: 0.03  # 3%
+  # V4.1: Exposicao por operacao (% do capital TOTAL)
+  exposure: 0.10  # 10% por trade (aumentado de 3%)
 
-  # Exposição máxima total (% do capital)
-  max_total_exposure: 0.20  # 20%
+  # V4.1: Limites de exposicao por posicao
+  min_exposure: 0.05  # Minimo 5% por posicao
+  max_exposure_per_trade: 0.20  # Maximo 20% por posicao
+
+  # V4.1: Exposicao maxima total (% do capital) - aumentada para 80%
+  max_total_exposure: 0.80  # 80% (era 20%)
+
+  # V4.1: Numero maximo de posicoes simultaneas
+  max_positions: 8
+
+  # V4.1: Valor minimo por trade em R$
+  min_trade_value: 100.0
 
 # Configurações de Estratégia
 strategy:
@@ -83,6 +93,86 @@ data:
 
   # Delay entre tentativas (em segundos)
   retry_delay: 2
+
+# V4.1: Configuracoes de Blacklist automatica
+blacklist:
+  # Numero maximo de falhas consecutivas antes de blacklist
+  max_fails: 3
+
+  # Duracao da blacklist em horas
+  duration_hours: 24
+
+  # Horas para resetar contador de falhas
+  reset_hours: 1
+
+# V4.1: Configuracoes de Coleta Paralela
+parallel_fetcher:
+  # Numero de workers paralelos
+  max_workers: 5
+
+  # Timeout por simbolo em segundos
+  timeout: 10.0
+
+  # Maximo de requisicoes concorrentes (async)
+  max_concurrent: 10
+
+# V4.1: Configuracoes de Cache Inteligente
+cache:
+  # Cache em memoria
+  memory_size: 100  # Numero de itens
+  memory_ttl: 300   # TTL em segundos (5 min)
+
+  # Cache em disco
+  disk_enabled: true
+  disk_dir: "/tmp/lobo_cache"
+  disk_ttl_hours: 24
+
+# V4.1: Configuracoes de Health Monitor
+health:
+  # Limiar de latencia para warning (ms)
+  latency_warning_ms: 2000
+
+  # Limiar de latencia critica (ms)
+  latency_critical_ms: 5000
+
+  # Taxa minima de sucesso
+  min_success_rate: 0.7
+
+# V4.1: Configuracoes do Otimizador de Portfolio
+optimizer:
+  # Tempo maximo de holding em horas
+  max_holding_hours: 72  # 3 dias
+
+  # Limiar de estagnacao (%)
+  stagnation_threshold: 0.5
+
+  # Horas para considerar estagnacao
+  stagnation_hours: 24
+
+  # Take profit parcial
+  partial_tp_pct: 3.0      # Acionar com 3% de lucro
+  partial_tp_close: 50     # Fechar 50% da posicao
+
+  # Perda maxima por posicao
+  max_loss_pct: 5.0
+
+# V4.1: Configuracoes do Validador de Sinais
+validator:
+  # Confianca minima para aceitar sinal
+  min_confidence: 0.50
+
+  # Pesos das validacoes
+  weights:
+    rsi: 0.20
+    volume: 0.20
+    trend: 0.25
+    macd: 0.20
+    support_resistance: 0.15
+
+  # Parametros de indicadores
+  rsi_oversold: 30
+  rsi_overbought: 70
+  volume_threshold: 1.5  # 150% do volume medio
 
 # Configurações de Risco
 risk:
