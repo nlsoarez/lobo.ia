@@ -1,9 +1,10 @@
 """
 Gerenciador de portfólio com controle de risco e posições.
+V4.1 - Correções no cálculo de posição e exposição.
 """
 
 from typing import Dict, Optional, List, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from config_loader import config
 from system_logger import system_logger
 
@@ -12,6 +13,13 @@ class PortfolioManager:
     """
     Gerencia capital, posições abertas e controle de risco.
     Implementa stop-loss, take-profit e validações de exposição.
+
+    V4.1 Melhorias:
+    - Exposição baseada em percentual do capital total
+    - Quantidade mínima garantida (>= 1 ação)
+    - Exposição por posição: 5-20% (configurável)
+    - Exposição total máxima: 80% (configurável)
+    - Ajuste dinâmico baseado na força do sinal
     """
 
     def __init__(self, initial_capital: Optional[float] = None):
@@ -32,9 +40,22 @@ class PortfolioManager:
         self.current_capital = initial_capital
         self.available_capital = initial_capital
 
-        # Configurações de exposição
-        self.exposure_per_trade = trading_config.get('exposure', 0.03)  # 3%
-        self.max_total_exposure = trading_config.get('max_total_exposure', 0.20)  # 20%
+        # V4.1: Configurações de exposição aprimoradas
+        # Exposição base por trade (% do capital TOTAL, não disponível)
+        self.exposure_per_trade = trading_config.get('exposure', 0.10)  # 10% por trade (era 3%)
+
+        # Limites de exposição por posição
+        self.min_exposure_per_trade = trading_config.get('min_exposure', 0.05)  # Mínimo 5%
+        self.max_exposure_per_trade = trading_config.get('max_exposure_per_trade', 0.20)  # Máximo 20% por posição
+
+        # V4.1: Exposição total máxima aumentada para 80% (era 20%)
+        self.max_total_exposure = trading_config.get('max_total_exposure', 0.80)
+
+        # V4.1: Número máximo de posições simultâneas
+        self.max_positions = trading_config.get('max_positions', 8)
+
+        # V4.1: Valor mínimo por trade (evita trades muito pequenos)
+        self.min_trade_value = trading_config.get('min_trade_value', 100.0)  # R$ 100 mínimo
 
         # Configurações de risco
         self.stop_loss_pct = risk_config.get('stop_loss', 0.02)  # 2%
@@ -48,63 +69,162 @@ class PortfolioManager:
         self.trade_history: List[Dict] = []
 
         system_logger.info(
-            f"Portfolio inicializado: R$ {self.current_capital:.2f} "
-            f"(Exposição: {self.exposure_per_trade*100:.1f}% por trade, "
-            f"Máx total: {self.max_total_exposure*100:.1f}%)"
+            f"Portfolio V4.1 inicializado: R$ {self.current_capital:.2f} | "
+            f"Exposição: {self.exposure_per_trade*100:.1f}% por trade | "
+            f"Máx total: {self.max_total_exposure*100:.1f}% | "
+            f"Máx posições: {self.max_positions}"
         )
 
-    def calculate_position_size(self, symbol: str, price: float) -> int:
+    def calculate_position_size(
+        self,
+        symbol: str,
+        price: float,
+        signal_strength: float = 0.5
+    ) -> int:
         """
-        Calcula tamanho da posição baseado no capital e exposição.
+        Calcula tamanho da posição baseado no capital, exposição e força do sinal.
+
+        V4.1 Melhorias:
+        - Garante quantidade mínima >= 1 quando há capital
+        - Ajusta exposição baseado na força do sinal
+        - Verifica limite de posições simultâneas
+        - Logs detalhados para debugging
 
         Args:
             symbol: Símbolo do ativo.
             price: Preço atual do ativo.
+            signal_strength: Força do sinal (0-1), afeta tamanho da posição.
 
         Returns:
-            Quantidade de ações a comprar.
-
-        Raises:
-            ValueError: Se não houver capital suficiente ou exposição excedida.
+            Quantidade de ações a comprar (>= 1 ou 0 se impossível).
         """
         # Verifica se já tem posição aberta
         if symbol in self.positions:
-            system_logger.warning(f"Já existe posição aberta para {symbol}")
+            system_logger.debug(f"Já existe posição aberta para {symbol}")
             return 0
 
-        # Calcula valor a investir (% do capital)
-        investment_amount = self.current_capital * self.exposure_per_trade
-
-        # Verifica se há capital disponível
-        if investment_amount > self.available_capital:
+        # V4.1: Verifica limite de posições
+        if len(self.positions) >= self.max_positions:
             system_logger.warning(
-                f"Capital insuficiente: Necessário R$ {investment_amount:.2f}, "
-                f"Disponível R$ {self.available_capital:.2f}"
+                f"Limite de posições atingido: {len(self.positions)}/{self.max_positions}"
+            )
+            return 0
+
+        # V4.1: Calcula exposição ajustada pela força do sinal
+        # signal_strength 0.5 = 100% da exposição base
+        # signal_strength 1.0 = 150% da exposição base
+        # signal_strength 0.3 = 80% da exposição base
+        signal_multiplier = 0.5 + (signal_strength * 1.0)  # 0.5 a 1.5
+        adjusted_exposure = self.exposure_per_trade * signal_multiplier
+
+        # Limita à exposição máxima por posição
+        adjusted_exposure = min(adjusted_exposure, self.max_exposure_per_trade)
+        adjusted_exposure = max(adjusted_exposure, self.min_exposure_per_trade)
+
+        # Calcula valor a investir (% do capital TOTAL)
+        investment_amount = self.current_capital * adjusted_exposure
+
+        # V4.1: Ajusta se exceder capital disponível
+        if investment_amount > self.available_capital:
+            # Tenta usar o que está disponível (se for suficiente)
+            investment_amount = self.available_capital
+            system_logger.debug(
+                f"Ajustando investimento para capital disponível: R$ {investment_amount:.2f}"
+            )
+
+        # V4.1: Verifica valor mínimo de trade
+        if investment_amount < self.min_trade_value:
+            system_logger.warning(
+                f"Capital insuficiente para trade mínimo: R$ {investment_amount:.2f} "
+                f"< R$ {self.min_trade_value:.2f}"
             )
             return 0
 
         # Calcula quantidade de ações
         quantity = int(investment_amount / price)
 
-        # Valor real da compra
-        actual_cost = quantity * price
+        # V4.1: Garante quantidade mínima de 1 ação
+        if quantity < 1 and price <= self.available_capital:
+            quantity = 1
+            system_logger.debug(
+                f"Ajustando para quantidade mínima: 1 ação de {symbol}"
+            )
 
-        # Verifica exposição total
-        total_exposure = self._calculate_total_exposure() + actual_cost
-        max_exposure_value = self.current_capital * self.max_total_exposure
-
-        if total_exposure > max_exposure_value:
+        if quantity < 1:
             system_logger.warning(
-                f"Exposição máxima excedida: {total_exposure:.2f} > {max_exposure_value:.2f}"
+                f"Preço muito alto para capital disponível: {symbol} @ R$ {price:.2f}"
             )
             return 0
 
+        # Valor real da compra
+        actual_cost = quantity * price
+
+        # V4.1: Verifica se ainda cabe no capital disponível
+        if actual_cost > self.available_capital:
+            quantity = int(self.available_capital / price)
+            if quantity < 1:
+                system_logger.warning(
+                    f"Capital disponível insuficiente: R$ {self.available_capital:.2f} "
+                    f"para {symbol} @ R$ {price:.2f}"
+                )
+                return 0
+            actual_cost = quantity * price
+
+        # Verifica exposição total
+        current_exposure = self._calculate_total_exposure()
+        new_total_exposure = current_exposure + actual_cost
+        max_exposure_value = self.current_capital * self.max_total_exposure
+
+        if new_total_exposure > max_exposure_value:
+            # V4.1: Tenta reduzir quantidade para caber na exposição
+            available_for_new = max_exposure_value - current_exposure
+            if available_for_new >= price:
+                quantity = int(available_for_new / price)
+                actual_cost = quantity * price
+                system_logger.info(
+                    f"Reduzindo posição para caber na exposição máxima: {quantity} ações"
+                )
+            else:
+                system_logger.warning(
+                    f"Exposição máxima atingida: {current_exposure:.2f}/{max_exposure_value:.2f} "
+                    f"({current_exposure/self.current_capital*100:.1f}%)"
+                )
+                return 0
+
+        # V4.1: Log detalhado da decisão
+        exposure_pct = (actual_cost / self.current_capital) * 100
+        total_exposure_pct = (new_total_exposure / self.current_capital) * 100
+
         system_logger.info(
-            f"Posição calculada: {quantity} ações de {symbol} @ R$ {price:.2f} "
-            f"(Total: R$ {actual_cost:.2f})"
+            f"📊 Posição calculada: {quantity} x {symbol} @ R$ {price:.2f} = R$ {actual_cost:.2f} | "
+            f"Exposição: {exposure_pct:.1f}% | Total: {total_exposure_pct:.1f}% | "
+            f"Sinal: {signal_strength:.2f}"
         )
 
         return quantity
+
+    def get_allocation_status(self) -> Dict:
+        """
+        Retorna status detalhado da alocação de capital.
+
+        Returns:
+            Dicionário com métricas de alocação.
+        """
+        total_exposure = self._calculate_total_exposure()
+        max_exposure = self.current_capital * self.max_total_exposure
+
+        return {
+            'current_capital': self.current_capital,
+            'available_capital': self.available_capital,
+            'total_exposure': total_exposure,
+            'total_exposure_pct': (total_exposure / self.current_capital) * 100,
+            'max_exposure': max_exposure,
+            'max_exposure_pct': self.max_total_exposure * 100,
+            'remaining_capacity': max_exposure - total_exposure,
+            'open_positions': len(self.positions),
+            'max_positions': self.max_positions,
+            'can_open_new': len(self.positions) < self.max_positions and total_exposure < max_exposure
+        }
 
     def open_position(
         self,

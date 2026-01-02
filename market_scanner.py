@@ -1,18 +1,22 @@
 """
 Market Scanner - Escaneia todo o mercado B3 para identificar melhores oportunidades.
 Analisa volume, tendência, volatilidade e indicadores técnicos.
+
+V4.1 - Adicionada pré-validação de símbolos e integração com blacklist.
 """
 
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 import ta
 
 from config_loader import config
 from system_logger import system_logger
+from data_collector import symbol_blacklist, DataCollector
 
 
 def get_close_column(df):
@@ -124,10 +128,93 @@ B3_STOCKS = [
 ]
 
 
+class SymbolReliability:
+    """
+    Rastreia confiabilidade de símbolos para priorização.
+    Símbolos com histórico de dados estáveis são analisados primeiro.
+    """
+
+    _instance = None
+    _lock = Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialize()
+        return cls._instance
+
+    def _initialize(self):
+        # {symbol: {'successes': int, 'failures': int, 'last_success': datetime}}
+        self._reliability: Dict[str, Dict] = {}
+        self._lock = Lock()
+
+    def record_success(self, symbol: str):
+        """Registra sucesso na análise do símbolo."""
+        with self._lock:
+            if symbol not in self._reliability:
+                self._reliability[symbol] = {'successes': 0, 'failures': 0, 'last_success': None}
+            self._reliability[symbol]['successes'] += 1
+            self._reliability[symbol]['last_success'] = datetime.now()
+
+    def record_failure(self, symbol: str):
+        """Registra falha na análise do símbolo."""
+        with self._lock:
+            if symbol not in self._reliability:
+                self._reliability[symbol] = {'successes': 0, 'failures': 0, 'last_success': None}
+            self._reliability[symbol]['failures'] += 1
+
+    def get_reliability_score(self, symbol: str) -> float:
+        """
+        Retorna score de confiabilidade (0-1).
+        1.0 = sempre funciona, 0.0 = nunca funciona.
+        """
+        with self._lock:
+            if symbol not in self._reliability:
+                return 0.5  # Neutro para símbolos novos
+
+            stats = self._reliability[symbol]
+            total = stats['successes'] + stats['failures']
+            if total == 0:
+                return 0.5
+
+            return stats['successes'] / total
+
+    def get_sorted_symbols(self, symbols: List[str]) -> List[str]:
+        """
+        Retorna símbolos ordenados por confiabilidade (mais confiáveis primeiro).
+        """
+        return sorted(
+            symbols,
+            key=lambda s: self.get_reliability_score(s),
+            reverse=True
+        )
+
+    def get_unreliable_symbols(self, threshold: float = 0.3) -> List[str]:
+        """Retorna símbolos com confiabilidade abaixo do limiar."""
+        with self._lock:
+            return [
+                symbol for symbol, stats in self._reliability.items()
+                if self.get_reliability_score(symbol) < threshold
+                and stats['failures'] >= 3  # Pelo menos 3 tentativas
+            ]
+
+
+# Instância global
+symbol_reliability = SymbolReliability()
+
+
 class MarketScanner:
     """
     Escaneia o mercado B3 para identificar as melhores oportunidades de trading.
     Analisa múltiplos critérios: volume, volatilidade, tendência e sinais técnicos.
+
+    V4.1 Melhorias:
+    - Integração com blacklist global
+    - Tracking de confiabilidade de símbolos
+    - Pré-validação antes de análise
+    - Símbolos ordenados por confiabilidade
     """
 
     def __init__(self):
@@ -155,11 +242,25 @@ class MarketScanner:
         self._cache_time = None
         self._cache_duration = timedelta(minutes=scanner_config.get('cache_minutes', 15))
 
-        system_logger.info(f"Market Scanner inicializado - Analisando {len(B3_STOCKS)} ações")
+        # V4.1: Estatísticas do scan
+        self._last_scan_stats = {
+            'total': 0,
+            'analyzed': 0,
+            'blacklisted': 0,
+            'failed': 0,
+            'valid': 0
+        }
+
+        system_logger.info(f"Market Scanner V4.1 inicializado - {len(B3_STOCKS)} ações disponíveis")
 
     def scan_market(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
         Escaneia todo o mercado e retorna as melhores oportunidades.
+
+        V4.1 Melhorias:
+        - Pré-filtra símbolos blacklisted
+        - Ordena por confiabilidade antes de analisar
+        - Estatísticas detalhadas do scan
 
         Args:
             force_refresh: Força atualização mesmo com cache válido.
@@ -175,6 +276,12 @@ class MarketScanner:
         system_logger.info("Iniciando scan do mercado B3...")
         start_time = datetime.now()
 
+        # V4.1: Pré-filtra símbolos blacklisted
+        valid_symbols = self._filter_valid_symbols(B3_STOCKS)
+
+        # V4.1: Ordena por confiabilidade (mais confiáveis primeiro)
+        sorted_symbols = symbol_reliability.get_sorted_symbols(valid_symbols)
+
         results = []
         failed = []
 
@@ -182,7 +289,7 @@ class MarketScanner:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_symbol = {
                 executor.submit(self._analyze_stock, symbol): symbol
-                for symbol in B3_STOCKS
+                for symbol in sorted_symbols
             }
 
             for future in as_completed(future_to_symbol):
@@ -191,8 +298,10 @@ class MarketScanner:
                     result = future.result()
                     if result:
                         results.append(result)
+                        symbol_reliability.record_success(symbol)
                 except Exception as e:
                     failed.append(symbol)
+                    symbol_reliability.record_failure(symbol)
                     system_logger.debug(f"Erro ao analisar {symbol}: {e}")
 
         # Ordena por score total
@@ -205,14 +314,54 @@ class MarketScanner:
         self._cache = {'results': top_results}
         self._cache_time = datetime.now()
 
+        # V4.1: Atualiza estatísticas
+        blacklisted_count = len(B3_STOCKS) - len(valid_symbols)
+        self._last_scan_stats = {
+            'total': len(B3_STOCKS),
+            'analyzed': len(sorted_symbols),
+            'blacklisted': blacklisted_count,
+            'failed': len(failed),
+            'valid': len(results)
+        }
+
         elapsed = (datetime.now() - start_time).total_seconds()
         system_logger.info(
-            f"Scan completo em {elapsed:.1f}s - "
-            f"{len(results)} ações válidas, {len(failed)} falhas, "
+            f"📊 Scan completo em {elapsed:.1f}s - "
+            f"{len(results)} válidas, {len(failed)} falhas, {blacklisted_count} blacklisted | "
             f"Top {len(top_results)} selecionadas"
         )
 
+        # V4.1: Log de símbolos blacklisted se houver
+        blacklisted = symbol_blacklist.get_blacklisted_symbols()
+        if blacklisted:
+            system_logger.info(f"🚫 Símbolos ignorados (blacklist): {', '.join(blacklisted[:5])}{'...' if len(blacklisted) > 5 else ''}")
+
         return top_results
+
+    def _filter_valid_symbols(self, symbols: List[str]) -> List[str]:
+        """
+        Filtra símbolos válidos removendo blacklisted.
+
+        Args:
+            symbols: Lista de símbolos a filtrar.
+
+        Returns:
+            Lista de símbolos válidos.
+        """
+        valid = []
+        for symbol in symbols:
+            # Verifica blacklist global
+            if symbol_blacklist.is_blacklisted(symbol):
+                system_logger.debug(f"Pulando {symbol}: blacklisted")
+                continue
+
+            valid.append(symbol)
+
+        return valid
+
+    def get_scan_stats(self) -> Dict[str, int]:
+        """Retorna estatísticas do último scan."""
+        return self._last_scan_stats.copy()
 
     def _is_cache_valid(self) -> bool:
         """Verifica se o cache ainda é válido."""
