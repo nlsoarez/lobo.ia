@@ -90,6 +90,20 @@ except ImportError as e:
     HAS_PHASE4 = False
     system_logger.warning(f"Phase 4 módulos não disponíveis: {e}")
 
+# V4.1: Importa módulos avançados de robustez
+try:
+    from parallel_fetcher import ParallelFetcher, parallel_fetcher
+    from smart_cache import SmartCache, smart_cache
+    from signal_validator import SignalValidator, signal_validator
+    from health_monitor import HealthMonitor, health_monitor
+    from portfolio_optimizer import PortfolioOptimizer, portfolio_optimizer
+    from data_collector import symbol_blacklist
+    HAS_V41 = True
+    system_logger.info("V4.1 módulos carregados: ParallelFetcher, SmartCache, SignalValidator, HealthMonitor, PortfolioOptimizer")
+except ImportError as e:
+    HAS_V41 = False
+    system_logger.warning(f"V4.1 módulos não disponíveis: {e}")
+
 
 class MarketScheduler:
     """
@@ -259,6 +273,32 @@ class LoboSystem:
         else:
             self.auto_optimizer = None
             self.last_optimization_cycle = None
+
+        # V4.1: Sistema de robustez avançada
+        self.v41_enabled = HAS_V41
+        if self.v41_enabled:
+            # Usa instâncias globais dos módulos
+            self.parallel_fetcher_v41 = parallel_fetcher
+            self.smart_cache_v41 = smart_cache
+            self.signal_validator_v41 = signal_validator
+            self.health_monitor_v41 = health_monitor
+            self.portfolio_optimizer_v41 = portfolio_optimizer
+            self.symbol_blacklist = symbol_blacklist
+
+            # Log status inicial do blacklist
+            blacklisted = symbol_blacklist.get_blacklisted_symbols()
+            if blacklisted:
+                system_logger.info(f"🚫 Blacklist V4.1: {len(blacklisted)} símbolos bloqueados")
+
+            system_logger.info("V4.1: Sistema de robustez ATIVO (Blacklist, Cache, Health, Optimizer)")
+        else:
+            self.parallel_fetcher_v41 = None
+            self.smart_cache_v41 = None
+            self.signal_validator_v41 = None
+            self.health_monitor_v41 = None
+            self.portfolio_optimizer_v41 = None
+            self.symbol_blacklist = None
+
         self.crypto_exposure = config.get('crypto.exposure', 0.05)  # 5% por trade
         self.crypto_stop_loss = config.get('risk.stop_loss', 0.02)
         self.crypto_take_profit = config.get('risk.take_profit', 0.05)
@@ -649,6 +689,21 @@ class LoboSystem:
                             pass
 
                     self._run_phase4_optimization_cycle(market_data, recent_trades)
+
+                # V4.1: Relatório de saúde do sistema
+                if self.v41_enabled:
+                    health = self.health_monitor_v41.check_system_health()
+                    system_logger.info(
+                        f"\n📈 V4.1 Health: {health['status'].upper()} | "
+                        f"Latência={health['data_sources']['avg_latency_ms']:.0f}ms | "
+                        f"Sucesso={health['data_sources']['success_rate']:.1f}%"
+                    )
+
+                    # Log blacklist atualizado
+                    if self.symbol_blacklist:
+                        blacklisted = self.symbol_blacklist.get_blacklisted_symbols()
+                        if blacklisted:
+                            system_logger.info(f"   🚫 Blacklist: {len(blacklisted)} símbolos ({', '.join(blacklisted[:5])}{'...' if len(blacklisted) > 5 else ''})")
 
             self.last_crypto_run = now
 
