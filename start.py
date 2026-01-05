@@ -104,6 +104,18 @@ except ImportError as e:
     HAS_V41 = False
     system_logger.warning(f"V4.1 módulos não disponíveis: {e}")
 
+# V4.2: Importa módulos de emergência e alertas
+try:
+    from emergency_trade_manager import EmergencyTradeManager, emergency_trade_manager
+    from smart_health_metrics import SmartHealthMetrics, smart_health_metrics
+    from emergency_signal_prioritizer import EmergencySignalPrioritizer, emergency_signal_prioritizer
+    from smart_alert_system import SmartAlertSystem, smart_alert_system
+    HAS_V42 = True
+    system_logger.info("V4.2 módulos carregados: EmergencyTradeManager, SmartHealthMetrics, SignalPrioritizer, AlertSystem")
+except ImportError as e:
+    HAS_V42 = False
+    system_logger.warning(f"V4.2 módulos não disponíveis: {e}")
+
 
 class CryptoScheduler:
     """
@@ -230,6 +242,22 @@ class LoboSystem:
             self.health_monitor_v41 = None
             self.portfolio_optimizer_v41 = None
             self.symbol_blacklist = None
+
+        # V4.2: Sistema de emergência e alertas
+        self.v42_enabled = HAS_V42
+        if self.v42_enabled:
+            # Usa instâncias globais dos módulos V4.2
+            self.emergency_trade_manager = emergency_trade_manager
+            self.smart_health_metrics = smart_health_metrics
+            self.emergency_signal_prioritizer = emergency_signal_prioritizer
+            self.smart_alert_system = smart_alert_system
+
+            system_logger.info("V4.2: Sistema de emergência ATIVO (TradeManager, HealthMetrics, SignalPrioritizer, AlertSystem)")
+        else:
+            self.emergency_trade_manager = None
+            self.smart_health_metrics = None
+            self.emergency_signal_prioritizer = None
+            self.smart_alert_system = None
 
         self.crypto_exposure = config.get('crypto.exposure', 0.05)  # 5% por trade
         self.crypto_stop_loss = config.get('risk.stop_loss', 0.02)
