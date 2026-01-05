@@ -1,6 +1,7 @@
 """
-Lobo IA - Trading Portal
+Lobo IA - Crypto Trading Portal
 Interface profissional com atualizacao em tempo real.
+Versao 4.2 - Crypto Only (24/7)
 
 Execute com: streamlit run dashboard.py --server.runOnSave true
 """
@@ -37,22 +38,10 @@ from config_loader import config
 
 # Imports opcionais
 try:
-    from b3_calendar import is_holiday, is_weekend, is_trading_day, get_next_trading_day
-    HAS_CALENDAR = True
-except ImportError:
-    HAS_CALENDAR = False
-
-try:
     from crypto_scanner import CryptoScanner
     HAS_CRYPTO = True
 except ImportError:
     HAS_CRYPTO = False
-
-try:
-    from market_scanner import MarketScanner
-    HAS_SCANNER = True
-except ImportError:
-    HAS_SCANNER = False
 
 try:
     from binance_client import BinanceClient
@@ -620,26 +609,10 @@ def get_crypto_scan():
 
 
 def get_market_status():
-    """Status dos mercados (usando horario de Brasilia)."""
+    """Status do mercado crypto (sempre aberto 24/7)."""
     now = get_brazil_time()
-    b3_open = False
-    b3_status = "Fechado"
-
-    if HAS_CALENDAR:
-        # Converte para datetime naive para compatibilidade com b3_calendar
-        now_naive = now.replace(tzinfo=None) if now.tzinfo else now
-        if is_weekend(now_naive):
-            b3_status = "Fim de semana"
-        elif is_holiday(now_naive):
-            b3_status = "Feriado"
-        elif 10 <= now.hour < 18:
-            b3_open = True
-            b3_status = "Aberto"
-        else:
-            b3_status = "Fora do horario"
 
     return {
-        'b3': {'open': b3_open, 'status': b3_status},
         'crypto': {'open': True, 'status': '24/7'},
         'time': now.strftime("%H:%M:%S"),
         'date': now.strftime("%d/%m/%Y")
@@ -655,7 +628,6 @@ def render_topbar():
     market = get_market_status()
     mode = config.get('execution.mode', 'simulation')
 
-    b3_dot = "online" if market['b3']['open'] else "offline"
     mode_text = "SIMULACAO" if mode == "simulation" else "REAL"
     mode_color = "var(--yellow)" if mode == "simulation" else "var(--green)"
 
@@ -663,14 +635,10 @@ def render_topbar():
     <div class="top-bar">
         <div class="logo-section">
             <span class="logo-icon">🐺</span>
-            <span class="logo-text">Lobo IA</span>
+            <span class="logo-text">Lobo IA Crypto</span>
             <span class="logo-badge" style="background: {mode_color}20; color: {mode_color};">{mode_text}</span>
         </div>
         <div class="status-section">
-            <div class="status-item">
-                <span class="status-dot {b3_dot}"></span>
-                B3 {market['b3']['status']}
-            </div>
             <div class="status-item">
                 <span class="status-dot online"></span>
                 Crypto 24/7
@@ -688,7 +656,7 @@ def render_stats_cards():
     stats = load_stats()
     trades_df = load_trades()
 
-    capital_inicial = config.get('trading.capital', 10000)
+    capital_inicial = config.get('crypto.capital', 1000)
     total_profit = float(stats.get('total_profit', 0))
     capital_atual = capital_inicial + total_profit
     win_rate = float(stats.get('win_rate', 0))
@@ -698,10 +666,8 @@ def render_stats_cards():
 
     # Binance
     binance = get_binance_balance()
-    currency = "R$"
     if binance and binance.get('success'):
         capital_atual = float(binance.get('total_usdt', 0))
-        currency = "$"
 
     pct_change = ((capital_atual / capital_inicial) - 1) * 100 if capital_inicial > 0 else 0
 
@@ -709,11 +675,11 @@ def render_stats_cards():
 
     with col1:
         delta_color = "normal" if pct_change >= 0 else "inverse"
-        st.metric("Capital", f"{currency} {capital_atual:,.2f}", f"{pct_change:+.2f}%", delta_color=delta_color)
+        st.metric("Capital", f"$ {capital_atual:,.2f}", f"{pct_change:+.2f}%", delta_color=delta_color)
 
     with col2:
         delta_color = "normal" if total_profit >= 0 else "inverse"
-        st.metric("P&L Total", f"R$ {total_profit:,.2f}", "Lucro" if total_profit >= 0 else "Perda", delta_color=delta_color)
+        st.metric("P&L Total", f"$ {total_profit:,.2f}", "Lucro" if total_profit >= 0 else "Perda", delta_color=delta_color)
 
     with col3:
         delta_color = "normal" if win_rate >= 50 else "inverse"
@@ -954,9 +920,9 @@ def render_settings():
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("**Trading**")
-        st.write(f"Capital: R$ {config.get('trading.capital', 10000):,.2f}")
-        st.write(f"Exposicao: {config.get('trading.exposure', 0.03)*100:.1f}%")
+        st.markdown("**Crypto Trading**")
+        st.write(f"Capital: $ {config.get('crypto.capital', 1000):,.2f} USD")
+        st.write(f"Exposicao: {config.get('crypto.exposure', 0.10)*100:.1f}%")
         st.write(f"Stop Loss: {config.get('risk.stop_loss', 0.02)*100:.1f}%")
         st.write(f"Take Profit: {config.get('risk.take_profit', 0.05)*100:.1f}%")
 
