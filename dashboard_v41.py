@@ -1,6 +1,7 @@
 """
-Lobo IA Dashboard V4.1 - Professional Trading Interface
-Comprehensive monitoring dashboard with modern design.
+Lobo IA Dashboard V4.2 - Crypto Trading Interface
+Comprehensive monitoring dashboard for cryptocurrency trading.
+Versao 4.2 - Crypto Only (24/7)
 
 Run: streamlit run dashboard_v41.py --server.port 8501
 """
@@ -360,10 +361,10 @@ def save_system_state(state):
 
 
 def get_initial_capital():
-    """Get initial capital from config."""
+    """Get initial capital from config (USD)."""
     if HAS_CONFIG and config:
         return config.get('crypto.capital', 1000.0)
-    return 1000.0
+    return 1000.0  # Default $1000 USD
 
 
 def get_positions():
@@ -433,8 +434,8 @@ def render_header():
         <div style="display: flex; align-items: center; gap: 0.75rem;">
             <span style="font-size: 2.5rem;">🐺</span>
             <div>
-                <div style="font-size: 1.5rem; font-weight: 700; color: #f0f6fc;">LOBO IA</div>
-                <div style="font-size: 0.8rem; color: #8b949e;">Trading Autônomo V4.1</div>
+                <div style="font-size: 1.5rem; font-weight: 700; color: #f0f6fc;">LOBO IA CRYPTO</div>
+                <div style="font-size: 0.8rem; color: #8b949e;">Crypto Trading 24/7 V4.2</div>
             </div>
         </div>
         """, unsafe_allow_html=True)

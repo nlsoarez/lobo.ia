@@ -1,6 +1,6 @@
 """
 Gerenciador de portfólio com controle de risco e posições.
-V4.1 - Correções no cálculo de posição e exposição.
+V4.2 - Sistema de Trading de Criptomoedas (USD)
 """
 
 from typing import Dict, Optional, List, Tuple
@@ -11,12 +11,12 @@ from system_logger import system_logger
 
 class PortfolioManager:
     """
-    Gerencia capital, posições abertas e controle de risco.
+    Gerencia capital, posições abertas e controle de risco para criptomoedas.
     Implementa stop-loss, take-profit e validações de exposição.
 
-    V4.1 Melhorias:
+    V4.2 - Crypto Only (USD):
     - Exposição baseada em percentual do capital total
-    - Quantidade mínima garantida (>= 1 ação)
+    - Quantidade fracionária para criptomoedas
     - Exposição por posição: 5-20% (configurável)
     - Exposição total máxima: 80% (configurável)
     - Ajuste dinâmico baseado na força do sinal
@@ -27,35 +27,35 @@ class PortfolioManager:
         Inicializa o gerenciador de portfólio.
 
         Args:
-            initial_capital: Capital inicial em R$. Se None, usa config.yaml.
+            initial_capital: Capital inicial em USD. Se None, usa config.yaml.
         """
         # Carrega configurações
-        trading_config = config.get_section('trading')
+        crypto_config = config.get_section('crypto')
         risk_config = config.get_section('risk')
 
         if initial_capital is None:
-            initial_capital = trading_config.get('capital', 10000.0)
+            initial_capital = crypto_config.get('capital', 1000.0)
 
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.available_capital = initial_capital
 
-        # V4.1: Configurações de exposição aprimoradas
-        # Exposição base por trade (% do capital TOTAL, não disponível)
-        self.exposure_per_trade = trading_config.get('exposure', 0.10)  # 10% por trade (era 3%)
+        # V4.2: Configurações de exposição para crypto
+        # Exposição base por trade (% do capital TOTAL)
+        self.exposure_per_trade = crypto_config.get('exposure', 0.10)  # 10% por trade
 
         # Limites de exposição por posição
-        self.min_exposure_per_trade = trading_config.get('min_exposure', 0.05)  # Mínimo 5%
-        self.max_exposure_per_trade = trading_config.get('max_exposure_per_trade', 0.20)  # Máximo 20% por posição
+        self.min_exposure_per_trade = crypto_config.get('min_exposure', 0.05)  # Mínimo 5%
+        self.max_exposure_per_trade = crypto_config.get('max_exposure_per_trade', 0.20)  # Máximo 20% por posição
 
-        # V4.1: Exposição total máxima aumentada para 80% (era 20%)
-        self.max_total_exposure = trading_config.get('max_total_exposure', 0.80)
+        # V4.2: Exposição total máxima 80%
+        self.max_total_exposure = crypto_config.get('max_total_exposure', 0.80)
 
-        # V4.1: Número máximo de posições simultâneas
-        self.max_positions = trading_config.get('max_positions', 8)
+        # V4.2: Número máximo de posições simultâneas
+        self.max_positions = crypto_config.get('max_positions', 8)
 
-        # V4.1: Valor mínimo por trade (evita trades muito pequenos)
-        self.min_trade_value = trading_config.get('min_trade_value', 100.0)  # R$ 100 mínimo
+        # V4.2: Valor mínimo por trade em USD
+        self.min_trade_value = crypto_config.get('min_trade_value', 50.0)  # $50 mínimo
 
         # Configurações de risco
         self.stop_loss_pct = risk_config.get('stop_loss', 0.02)  # 2%
@@ -69,7 +69,7 @@ class PortfolioManager:
         self.trade_history: List[Dict] = []
 
         system_logger.info(
-            f"Portfolio V4.1 inicializado: R$ {self.current_capital:.2f} | "
+            f"Portfolio V4.2 Crypto inicializado: ${self.current_capital:.2f} USD | "
             f"Exposição: {self.exposure_per_trade*100:.1f}% por trade | "
             f"Máx total: {self.max_total_exposure*100:.1f}% | "
             f"Máx posições: {self.max_positions}"

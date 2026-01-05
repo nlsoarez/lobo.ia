@@ -1,7 +1,9 @@
 """
-Inicializador do Lobo IA - Executa o sistema em loop contínuo.
-Verifica horário de mercado e executa análises periodicamente.
+Inicializador do Lobo IA - Sistema de Trading de Criptomoedas 24/7.
+Executa análises e trading de forma contínua.
 Otimizado para Railway e ambientes cloud.
+
+Versão 4.2 - Crypto Only
 """
 
 import os
@@ -29,9 +31,7 @@ def get_brazil_time() -> datetime:
 
 from config_loader import config
 from system_logger import system_logger
-from main import LoboTrader
 from health_server import start_health_server
-from b3_calendar import is_holiday, is_weekend, is_trading_day, get_next_trading_day
 from logger import Logger
 
 # Importa crypto scanner (opcional)
@@ -105,118 +105,50 @@ except ImportError as e:
     system_logger.warning(f"V4.1 módulos não disponíveis: {e}")
 
 
-class MarketScheduler:
+class CryptoScheduler:
     """
-    Gerencia agendamento de execução baseado em horários de mercado.
-    Verifica se mercado está aberto considerando dias úteis, feriados e horários da B3.
+    Scheduler simples para trading de criptomoedas 24/7.
+    Opera continuamente sem restrições de horário.
     """
 
     def __init__(self):
-        """Inicializa o scheduler com configurações de mercado."""
-        market_config = config.get_section('market')
-
-        self.open_hour = market_config.get('open_hour', 10)
-        self.close_hour = market_config.get('close_hour', 18)
-        self.trading_days = market_config.get('trading_days', [0, 1, 2, 3, 4])  # Seg-Sex
-        self.check_interval = market_config.get('check_interval', 60)  # segundos
-        self.check_holidays = market_config.get('check_holidays', True)
-
-        system_logger.info(
-            f"Scheduler configurado: {self.open_hour}h-{self.close_hour}h, "
-            f"Dias: {self.trading_days}, Verificar feriados: {self.check_holidays}"
-        )
+        """Inicializa o scheduler para crypto 24/7."""
+        self.check_interval = config.get('crypto.check_interval', 60)  # segundos
+        system_logger.info("Scheduler configurado para Crypto 24/7")
 
     def is_market_open(self) -> bool:
-        """
-        Verifica se o mercado B3 está aberto no momento.
-
-        Returns:
-            True se mercado está aberto.
-        """
-        now = datetime.now()
-
-        # Verifica fim de semana
-        if is_weekend(now):
-            return False
-
-        # Verifica feriados da B3
-        if self.check_holidays and is_holiday(now):
-            return False
-
-        # Verifica dia da semana (0=segunda, 6=domingo)
-        if now.weekday() not in self.trading_days:
-            return False
-
-        # Verifica horário
-        current_hour = now.hour
-
-        # Mercado abre às open_hour e fecha às close_hour
-        if not (self.open_hour <= current_hour < self.close_hour):
-            return False
-
+        """Mercado crypto está sempre aberto."""
         return True
 
     def get_market_status(self) -> dict:
-        """
-        Retorna status detalhado do mercado.
-
-        Returns:
-            Dicionário com informações do mercado.
-        """
+        """Retorna status do mercado crypto."""
         now = datetime.now()
         return {
-            'is_open': self.is_market_open(),
-            'is_weekend': is_weekend(now),
-            'is_holiday': is_holiday(now),
-            'is_trading_day': is_trading_day(now),
+            'is_open': True,
+            'market': 'CRYPTO',
+            'mode': '24/7',
             'current_time': now.strftime('%H:%M:%S'),
             'current_date': now.strftime('%Y-%m-%d'),
-            'next_trading_day': get_next_trading_day(now).strftime('%Y-%m-%d'),
         }
-
-    def time_until_market_open(self) -> Optional[int]:
-        """
-        Calcula tempo em segundos até abertura do mercado.
-
-        Returns:
-            Segundos até abertura ou None se mercado já está aberto.
-        """
-        if self.is_market_open():
-            return None
-
-        now = datetime.now()
-        from datetime import timedelta
-
-        # Encontra proximo dia de pregao
-        next_trading = get_next_trading_day(now)
-
-        # Calcula proximo horario de abertura
-        next_open = datetime.combine(next_trading, dtime(self.open_hour, 0, 0))
-
-        # Se hoje e dia de pregao mas ainda nao abriu
-        if is_trading_day(now) and now.hour < self.open_hour:
-            next_open = now.replace(hour=self.open_hour, minute=0, second=0, microsecond=0)
-
-        seconds_until = int((next_open - now).total_seconds())
-        return max(0, seconds_until)
 
 
 class LoboSystem:
     """
-    Sistema principal que gerencia execução contínua do Lobo IA.
+    Sistema principal de trading de criptomoedas 24/7.
     Otimizado para Railway com health check integrado.
     """
 
     def __init__(self):
         """Inicializa o sistema."""
-        self.scheduler = MarketScheduler()
-        self.trader: Optional[LoboTrader] = None
+        self.scheduler = CryptoScheduler()
         self.running = True
         self.health_server = None
 
         # Crypto trading 24/7
         self.crypto_enabled = HAS_CRYPTO and config.get('crypto.enabled', True)
-        self.crypto_scanner = CryptoScanner() if self.crypto_enabled else None
+        if not self.crypto_enabled:
+            raise RuntimeError("Crypto scanner é obrigatório para este sistema!")
+        self.crypto_scanner = CryptoScanner()
         self.crypto_interval = config.get('crypto.check_interval', 300)  # 5 minutos
         self.last_crypto_run = None
 
@@ -572,23 +504,15 @@ class LoboSystem:
 
     def run(self):
         """
-        Loop principal do sistema.
-        Executa análises quando mercado está aberto.
-        Crypto opera 24/7.
+        Loop principal do sistema de crypto trading 24/7.
+        Executa análises continuamente sem restrições de horário.
         """
-        system_logger.info("🚀 Iniciando loop principal...")
+        system_logger.info("🚀 Iniciando loop principal - Crypto Trading 24/7...")
 
         try:
             while self.running:
-                # Verifica se mercado B3 está aberto
-                if self.scheduler.is_market_open():
-                    self._execute_iteration()
-                else:
-                    # B3 fechada - executa crypto se habilitado
-                    if self.crypto_enabled:
-                        self._execute_crypto_iteration()
-                    else:
-                        self._wait_for_market()
+                # Executa crypto trading 24/7
+                self._execute_crypto_iteration()
 
                 # Aguarda intervalo antes da próxima verificação
                 if self.running:
@@ -605,22 +529,6 @@ class LoboSystem:
 
         finally:
             self._shutdown()
-
-    def _execute_iteration(self):
-        """Executa uma iteração do sistema de trading B3."""
-        try:
-            # Cria instância do trader se não existir
-            if self.trader is None:
-                self.trader = LoboTrader()
-
-            # Executa análise e trades
-            self.trader.run_iteration()
-
-        except Exception as e:
-            system_logger.error(
-                f"Erro durante execução: {str(e)}",
-                exc_info=True
-            )
 
     def _execute_crypto_iteration(self):
         """Executa uma iteração de análise e trading de criptomoedas (24/7)."""

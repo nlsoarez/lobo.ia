@@ -1,278 +1,10 @@
-# Configuracao do Lobo IA - Sistema de Trading Autonomo
-
-# Configuracoes do Scanner de Mercado (NOVO!)
-scanner:
-  # Ativar scanner automatico de mercado
-  # Quando ativo, analisa todas as acoes da B3 e seleciona as melhores
-  enabled: true
-
-  # Numero de acoes top para analisar
-  top_stocks: 20
-
-  # Volume medio minimo diario (liquidez)
-  min_avg_volume: 1000000
-
-  # Faixa de preco
-  min_price: 1.0
-  max_price: 500.0
-
-  # Threads paralelas para analise
-  max_workers: 10
-
-  # Tempo de cache do scan (em minutos)
-  cache_minutes: 15
-
-  # Imprimir relatorio de mercado no inicio
-  print_report: false
-
-  # Pesos para ranking (devem somar 1.0)
-  weights:
-    signal_strength: 0.30   # Forca do sinal tecnico (RSI, MACD, BB)
-    volume_score: 0.20      # Score de volume/liquidez
-    trend_score: 0.25       # Score de tendencia (EMAs)
-    volatility_score: 0.15  # Score de volatilidade
-    momentum_score: 0.10    # Score de momentum
-
-# Configuracoes de Trading V4.1
-trading:
-  # Simbolos fallback (usado apenas se scanner estiver desativado)
-  symbols:
-    - PETR4.SA
-    - VALE3.SA
-    - ITUB4.SA
-
-  # Capital inicial em R$
-  capital: 10000.0
-
-  # V4.1: Exposicao por operacao (% do capital TOTAL)
-  exposure: 0.10  # 10% por trade (aumentado de 3%)
-
-  # V4.1: Limites de exposicao por posicao
-  min_exposure: 0.05  # Minimo 5% por posicao
-  max_exposure_per_trade: 0.20  # Maximo 20% por posicao
-
-  # V4.1: Exposicao maxima total (% do capital) - aumentada para 80%
-  max_total_exposure: 0.80  # 80% (era 20%)
-
-  # V4.1: Numero maximo de posicoes simultaneas
-  max_positions: 8
-
-  # V4.1: Valor minimo por trade em R$
-  min_trade_value: 100.0
-
-# Configurações de Estratégia
-strategy:
-  # Indicadores técnicos
-  indicators:
-    rsi_period: 14
-    rsi_oversold: 30
-    rsi_overbought: 70
-    ema_period: 21
-    ema_fast: 9
-    ema_slow: 21
-
-  # Parâmetros de entrada/saída
-  min_signal_strength: 0.6  # 0-1
-
-# Configurações de Dados
-data:
-  # Período de dados históricos
-  period: "5d"  # 1d, 5d, 1mo, 3mo, 6mo, 1y
-
-  # Intervalo de candles
-  interval: "5m"  # 1m, 2m, 5m, 15m, 30m, 60m, 1h, 1d
-
-  # Cache de dados (em segundos)
-  cache_ttl: 300  # 5 minutos
-
-  # Timeout para requisições (em segundos)
-  request_timeout: 30
-
-  # Número de tentativas em caso de falha
-  max_retries: 3
-
-  # Delay entre tentativas (em segundos)
-  retry_delay: 2
-
-# V4.1: Configuracoes de Blacklist automatica
-blacklist:
-  # Numero maximo de falhas consecutivas antes de blacklist
-  max_fails: 3
-
-  # Duracao da blacklist em horas
-  duration_hours: 24
-
-  # Horas para resetar contador de falhas
-  reset_hours: 1
-
-# V4.1: Configuracoes de Coleta Paralela
-parallel_fetcher:
-  # Numero de workers paralelos
-  max_workers: 5
-
-  # Timeout por simbolo em segundos
-  timeout: 10.0
-
-  # Maximo de requisicoes concorrentes (async)
-  max_concurrent: 10
-
-# V4.1: Configuracoes de Cache Inteligente
-cache:
-  # Cache em memoria
-  memory_size: 100  # Numero de itens
-  memory_ttl: 300   # TTL em segundos (5 min)
-
-  # Cache em disco
-  disk_enabled: true
-  disk_dir: "/tmp/lobo_cache"
-  disk_ttl_hours: 24
-
-# V4.1: Configuracoes de Health Monitor
-health:
-  # Limiar de latencia para warning (ms)
-  latency_warning_ms: 2000
-
-  # Limiar de latencia critica (ms)
-  latency_critical_ms: 5000
-
-  # Taxa minima de sucesso
-  min_success_rate: 0.7
-
-# V4.1: Configuracoes do Otimizador de Portfolio
-optimizer:
-  # Tempo maximo de holding em horas
-  max_holding_hours: 72  # 3 dias
-
-  # Limiar de estagnacao (%)
-  stagnation_threshold: 0.5
-
-  # Horas para considerar estagnacao
-  stagnation_hours: 24
-
-  # Take profit parcial
-  partial_tp_pct: 3.0      # Acionar com 3% de lucro
-  partial_tp_close: 50     # Fechar 50% da posicao
-
-  # Perda maxima por posicao
-  max_loss_pct: 5.0
-
-# V4.1: Configuracoes do Validador de Sinais
-validator:
-  # Confianca minima para aceitar sinal
-  min_confidence: 0.50
-
-  # Pesos das validacoes
-  weights:
-    rsi: 0.20
-    volume: 0.20
-    trend: 0.25
-    macd: 0.20
-    support_resistance: 0.15
-
-  # Parametros de indicadores
-  rsi_oversold: 30
-  rsi_overbought: 70
-  volume_threshold: 1.5  # 150% do volume medio
-
-# Configurações de Risco
-risk:
-  # Stop loss (% de perda máxima por operação)
-  stop_loss: 0.02  # 2%
-
-  # Take profit (% de ganho alvo por operação)
-  take_profit: 0.05  # 5%
-
-  # Drawdown máximo (% de perda máxima do capital total)
-  max_drawdown: 0.10  # 10%
-
-  # Trailing stop (ativa após ganho de X%)
-  trailing_stop_activation: 0.03  # 3%
-  trailing_stop_distance: 0.015  # 1.5%
-
-# Configurações de Mercado
-market:
-  # Horário de funcionamento da B3
-  open_hour: 10
-  close_hour: 18
-
-  # Dias da semana (0=segunda, 4=sexta)
-  trading_days: [0, 1, 2, 3, 4]
-
-  # Considerar feriados brasileiros
-  check_holidays: true
-
-  # Intervalo entre verificações (em segundos)
-  check_interval: 60
-
-# Configurações de Banco de Dados
-database:
-  # Nome do arquivo SQLite
-  db_name: "trades.db"
-
-  # Backup automático
-  auto_backup: true
-  backup_interval_hours: 24
-
-# Configurações de Logging
-logging:
-  # Nível de log (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-  level: "INFO"
-
-  # Diretório de logs
-  log_dir: "logs"
-
-  # Formato do arquivo de log
-  log_file_format: "lobo_{date}.log"
-
-  # Tamanho máximo do arquivo (em MB)
-  max_file_size_mb: 10
-
-  # Número de arquivos de backup
-  backup_count: 5
-
-  # Log no console também
-  console_output: true
-
-# Configurações de Aprendizado
-learning:
-  # Ativar módulo de aprendizado
-  enabled: true
-
-  # Número mínimo de trades para avaliar performance
-  min_trades_for_evaluation: 10
-
-  # Frequência de avaliação (em número de trades)
-  evaluation_frequency: 20
-
-  # Métricas a acompanhar
-  metrics:
-    - win_rate
-    - profit_factor
-    - sharpe_ratio
-    - max_drawdown
-    - avg_profit_per_trade
-
-# Configurações de Execução
-execution:
-  # Modo de execução (simulation, paper, live)
-  mode: "simulation"
-
-  # Simular slippage (% do preço)
-  simulate_slippage: 0.001  # 0.1%
-
-  # Simular taxas de corretagem (% do valor da operação)
-  simulate_fees: 0.0005  # 0.05%
-
-  # Delay de execução simulada (em segundos)
-  execution_delay: 1
+# Configuracao do Lobo IA - Sistema de Trading Autonomo de Criptomoedas
+# Versao: 4.2 - Crypto Only (24/7)
 
 # Configuracoes de Criptomoedas (24/7)
 crypto:
-  # Ativar analise de criptomoedas
+  # Ativar trading de criptomoedas
   enabled: true
-
-  # Operar crypto quando B3 esta fechada
-  trade_when_b3_closed: true
 
   # Criptos principais a monitorar
   symbols:
@@ -281,50 +13,188 @@ crypto:
     - SOL-USD
     - BNB-USD
     - XRP-USD
+    - ADA-USD
+    - AVAX-USD
+    - DOT-USD
+    - LINK-USD
+    - MATIC-USD
 
   # Numero de criptos top para analisar
-  top_coins: 10
+  top_coins: 20
 
   # Intervalo de analise (1h recomendado para crypto)
   interval: "1h"
-  period: "30d"  # 30d para EMA 200 funcionar corretamente
+  period: "30d"
 
   # Cache em minutos
   cache_minutes: 5
 
-  # Capital separado para crypto (em USD)
-  capital_usd: 1000.0
+  # Capital para crypto (em USD)
+  capital: 1000.0
 
   # Exposicao por trade
-  exposure: 0.05  # 5%
+  exposure: 0.10  # 10% por trade
+
+  # Limites de exposicao
+  min_exposure: 0.05  # Minimo 5%
+  max_exposure_per_trade: 0.20  # Maximo 20%
+
+  # Exposicao maxima total
+  max_total_exposure: 0.80  # 80%
+
+  # Numero maximo de posicoes
+  max_positions: 8
+
+  # Valor minimo por trade em USD
+  min_trade_value: 50.0
 
   # Corretora de crypto
-  broker: "binance"  # binance, mercadobitcoin, foxbit
+  broker: "binance"
+
+# Configuracoes do Scanner de Mercado Crypto
+scanner:
+  enabled: true
+  top_coins: 20
+  min_avg_volume: 1000000
+  min_price: 0.001
+  max_price: 100000.0
+  max_workers: 10
+  cache_minutes: 15
+  print_report: false
+
+  # Pesos para ranking
+  weights:
+    signal_strength: 0.30
+    volume_score: 0.20
+    trend_score: 0.25
+    volatility_score: 0.15
+    momentum_score: 0.10
+
+# Configuracoes de Estrategia
+strategy:
+  indicators:
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    ema_period: 21
+    ema_fast: 9
+    ema_slow: 21
+
+  min_signal_strength: 0.6
+
+# Configuracoes de Dados
+data:
+  period: "30d"
+  interval: "1h"
+  cache_ttl: 300
+  request_timeout: 30
+  max_retries: 3
+  retry_delay: 2
+
+# Configuracoes de Blacklist automatica
+blacklist:
+  max_fails: 3
+  duration_hours: 24
+  reset_hours: 1
+
+# Configuracoes de Coleta Paralela
+parallel_fetcher:
+  max_workers: 5
+  timeout: 10.0
+  max_concurrent: 10
+
+# Configuracoes de Cache Inteligente
+cache:
+  memory_size: 100
+  memory_ttl: 300
+  disk_enabled: true
+  disk_dir: "/tmp/lobo_cache"
+  disk_ttl_hours: 24
+
+# Configuracoes de Health Monitor
+health:
+  latency_warning_ms: 2000
+  latency_critical_ms: 5000
+  min_success_rate: 0.7
+
+# Configuracoes do Otimizador de Portfolio
+optimizer:
+  max_holding_hours: 72
+  stagnation_threshold: 0.5
+  stagnation_hours: 24
+  partial_tp_pct: 3.0
+  partial_tp_close: 50
+  max_loss_pct: 5.0
+
+# Configuracoes do Validador de Sinais
+validator:
+  min_confidence: 0.50
+  weights:
+    rsi: 0.20
+    volume: 0.20
+    trend: 0.25
+    macd: 0.20
+    support_resistance: 0.15
+
+  rsi_oversold: 30
+  rsi_overbought: 70
+  volume_threshold: 1.5
+
+# Configuracoes de Risco
+risk:
+  stop_loss: 0.02
+  take_profit: 0.05
+  max_drawdown: 0.10
+  trailing_stop_activation: 0.03
+  trailing_stop_distance: 0.015
+
+# Configuracoes de Banco de Dados
+database:
+  db_name: "trades.db"
+  auto_backup: true
+  backup_interval_hours: 24
+
+# Configuracoes de Logging
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  log_file_format: "lobo_{date}.log"
+  max_file_size_mb: 10
+  backup_count: 5
+  console_output: true
+
+# Configuracoes de Aprendizado
+learning:
+  enabled: true
+  min_trades_for_evaluation: 10
+  evaluation_frequency: 20
+  metrics:
+    - win_rate
+    - profit_factor
+    - sharpe_ratio
+    - max_drawdown
+    - avg_profit_per_trade
+
+# Configuracoes de Execucao
+execution:
+  mode: "simulation"
+  simulate_slippage: 0.001
+  simulate_fees: 0.001
+  execution_delay: 1
 
 # Configuracoes de Corretoras
 brokers:
-  # B3 - Acoes brasileiras
-  b3:
-    provider: "simulation"  # simulation, metatrader5, xp, clear
-    # mt5_login: ""
-    # mt5_password: ""
-    # mt5_server: ""
-
-  # Crypto
   crypto:
-    provider: "simulation"  # simulation, binance, mercadobitcoin
+    provider: "simulation"
     # api_key: ""
     # api_secret: ""
     # testnet: true
 
 # Configuracoes de APIs de dados
 apis:
-  # CoinMarketCap - dados de mercado crypto em tempo real
   coinmarketcap:
     enabled: true
     # API Key - configure via variavel de ambiente CMC_API_KEY
-    # Limites do plano gratuito: 10.000 creditos/mes, 30 req/min
-    # Obtenha sua key em: https://coinmarketcap.com/api/
 
 # Configuracoes de Notificacao
 notifications:
