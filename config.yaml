@@ -202,3 +202,79 @@ notifications:
   email: ""
   telegram_token: ""
   telegram_chat_id: ""
+
+# ==================== CONFIGURACOES V4.2 EMERGENCIA ====================
+
+# Modo Emergencia - Override de limites durante crises
+emergency:
+  # Ativar modo emergencia automatico
+  enabled: true
+
+  # Duracao maxima do modo emergencia (horas)
+  max_duration_hours: 6
+
+  # Multiplicadores de limites durante emergencia
+  trade_limit_multiplier: 1.75      # Aumenta limite de trades em 75%
+  position_size_multiplier: 0.70    # Reduz tamanho de posicao em 30%
+  filter_relaxation_percent: 40     # Relaxa filtros em 40%
+
+  # Limites de trades
+  max_trades: 35                    # Maximo durante emergencia
+  max_positions_override: 7         # Maximo de posicoes durante emergencia
+
+  # Sinais criticos (bypass de limites)
+  critical_signals:
+    min_score: 65                   # Score minimo para sinal critico
+    max_rsi: 20                     # RSI maximo (oversold extremo)
+    min_volume_ratio: 1.5           # Volume minimo acima da media
+    allowed_override_trades: 5      # Trades adicionais permitidos com bypass
+
+  # Triggers para ativacao automatica
+  triggers:
+    hours_without_entry: 4          # Horas sem entrada para ativar
+    consecutive_losses: 3           # Perdas consecutivas
+    daily_loss_threshold: -0.02     # Perda diaria para ativar (-2%)
+
+  # Sistema de alertas
+  alerts:
+    enable_metric_alerts: true      # Alertas de metricas inconsistentes
+    enable_opportunity_alerts: true # Alertas de oportunidades perdidas
+    notification_channels:          # Canais de notificacao
+      - log
+      - dashboard
+    rsi_extreme_minutes: 30         # Minutos de RSI extremo para alerta
+
+# Limites Diarios de Trading
+daily_limits:
+  # Limites normais
+  regular:
+    max_trades: 20
+    max_positions: 5
+    max_daily_loss_percent: 2.0
+    target_profit_percent: 5.0      # Meta diaria de 5%
+    max_profit_percent: 8.0         # Maximo para parar (8%)
+
+  # Limites em modo emergencia
+  emergency:
+    max_trades: 35
+    max_positions: 7
+    max_daily_loss_percent: 3.0
+    critical_trade_allowance: 5     # Trades com bypass
+
+# Circuit Breakers - Protecao contra perdas
+circuit_breakers:
+  enabled: true
+  levels:
+    - losses: 2
+      action: "reduce_50"           # Reduz exposicao em 50%
+      multiplier: 0.5
+    - losses: 3
+      action: "pause_5min"          # Pausa por 5 minutos
+      pause_minutes: 5
+    - losses: 4
+      action: "pause_15min"         # Pausa por 15 minutos
+      pause_minutes: 15
+    - losses: 5
+      action: "stop_trading"        # Para operacoes
+      stop: true
+
