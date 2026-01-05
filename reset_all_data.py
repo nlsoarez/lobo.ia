@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Script para resetar TODOS os dados do Lobo IA.
-Remove trades, posições e reinicia capital.
+Script para resetar TODOS os dados do Lobo IA V4.2 (Crypto Only).
+Remove trades, posições e reinicia capital em USD.
 Execute: python reset_all_data.py
 """
 
@@ -16,7 +16,7 @@ from logger import Logger
 def reset_all_data():
     """Limpa todos os dados do banco para nova medição."""
     print("=" * 60)
-    print("🔄 RESET COMPLETO - Lobo IA")
+    print("🔄 RESET COMPLETO - Lobo IA V4.2 (Crypto Only)")
     print("=" * 60)
 
     try:
@@ -45,6 +45,10 @@ def reset_all_data():
         cursor.execute("DELETE FROM trades")
         print("   ✅ Tabela trades limpa")
 
+        # Reseta o autoincrement
+        cursor.execute("DELETE FROM sqlite_sequence")
+        print("   ✅ Sequências resetadas")
+
         logger.conn.commit()
 
         print("\n" + "=" * 60)
@@ -52,7 +56,8 @@ def reset_all_data():
         print("   Sistema reiniciado com:")
         print("   - 0 posições abertas")
         print("   - 0 trades históricos")
-        print("   - $1000.00 de capital inicial")
+        print("   - $1000.00 USD de capital inicial")
+        print("   - Modo: Crypto Only 24/7")
         print("=" * 60)
 
         logger.close()
