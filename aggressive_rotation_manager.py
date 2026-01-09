@@ -138,6 +138,81 @@ class AggressiveRotationManager:
 
         return True, "OK"
 
+    def can_rotate(
+        self,
+        current_position: Optional[Dict[str, Any]] = None,
+        candidate_signal: Optional[Dict[str, Any]] = None
+    ) -> Tuple[bool, str]:
+        """
+        V4.3: Verifica se uma posição pode ser rotacionada.
+
+        Critérios:
+        1. Posição aberta há pelo menos 0.5h (30 min)
+        2. P&L < -0.1% OU score atual < 20
+        3. Candidate score > 50
+        4. Não está em cooldown
+
+        Args:
+            current_position: Posição atual (opcional para verificação simples)
+            candidate_signal: Sinal candidato (opcional para verificação simples)
+
+        Returns:
+            (bool pode_rotacionar, str motivo)
+        """
+        # Primeiro verifica limites globais
+        can_rotate_limits, reason = self.check_rotation_limits()
+        if not can_rotate_limits:
+            return False, reason
+
+        # Se não forneceu posição/candidato, retorna apenas check de limites
+        if current_position is None:
+            return True, "OK - Limites verificados"
+
+        # Verifica idade mínima da posição (0.5h = 30 minutos)
+        entry_time = current_position.get('entry_time')
+        if entry_time:
+            now = datetime.now()
+            if hasattr(entry_time, 'tzinfo') and entry_time.tzinfo:
+                try:
+                    position_age_hours = (now.astimezone(entry_time.tzinfo) - entry_time).total_seconds() / 3600
+                except:
+                    position_age_hours = 0
+            else:
+                position_age_hours = (now - entry_time).total_seconds() / 3600
+
+            if position_age_hours < 0.5:
+                return False, f"Posição muito nova ({position_age_hours*60:.0f}min < 30min)"
+
+        # Verifica P&L atual
+        entry_price = current_position.get('entry_price', 0)
+        current_price = current_position.get('current_price', entry_price)
+        if entry_price > 0:
+            pnl_pct = (current_price - entry_price) / entry_price * 100
+        else:
+            pnl_pct = 0
+
+        # Verifica score atual da posição
+        current_score = current_position.get('entry_score', 50)
+
+        # Critério 2: P&L < -0.1% OU score < 20
+        position_weak = pnl_pct < -0.1 or current_score < 20
+
+        if not position_weak:
+            # Posição ainda está OK, verificar se candidato é muito melhor
+            if candidate_signal:
+                candidate_score = candidate_signal.get('total_score', 0) or candidate_signal.get('phase2_score', 0)
+                # Precisa de pelo menos 30 pontos de melhoria se posição não está fraca
+                if candidate_score - current_score < 30:
+                    return False, f"Posição não fraca (P&L={pnl_pct:.2f}%, Score={current_score}) e candidato não muito melhor"
+
+        # Critério 3: Candidate score > 50
+        if candidate_signal:
+            candidate_score = candidate_signal.get('total_score', 0) or candidate_signal.get('phase2_score', 0)
+            if candidate_score <= 50:
+                return False, f"Candidato com score baixo ({candidate_score} <= 50)"
+
+        return True, f"OK - Posição rotacionável (P&L={pnl_pct:.2f}%, Score={current_score})"
+
     def should_rotate_position(
         self,
         current_position: Dict[str, Any],

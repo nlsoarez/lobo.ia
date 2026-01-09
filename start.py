@@ -116,6 +116,23 @@ except ImportError as e:
     HAS_V42 = False
     system_logger.warning(f"V4.2 módulos não disponíveis: {e}")
 
+# V4.3: Importa módulos de correções críticas (Limite Trades, Filtros Adaptativos, Timeout Dinâmico)
+try:
+    from v43_trading_improvements import (
+        TradeLimitManager, trade_limit_manager,
+        AdaptiveFilter, adaptive_filter, MarketRegime,
+        DynamicTimeoutManager, dynamic_timeout_manager,
+        SmartTrailingStop, smart_trailing_stop,
+        StrongOverrideValidator, strong_override_validator,
+        pre_trade_validation, post_trade_actions, position_monitoring,
+        log_v43_status, TradeLimitExceededError
+    )
+    HAS_V43 = True
+    system_logger.info("V4.3 módulos carregados: TradeLimitManager, AdaptiveFilter, DynamicTimeout, SmartTrailing, OverrideValidator")
+except ImportError as e:
+    HAS_V43 = False
+    system_logger.warning(f"V4.3 módulos não disponíveis: {e}")
+
 
 class CryptoScheduler:
     """
@@ -797,7 +814,8 @@ class LoboSystem:
 
     def _check_daily_limits(self) -> bool:
         """
-        V4.1: Verifica se pode continuar operando baseado nos limites diários.
+        V4.3: Verifica se pode continuar operando baseado nos limites diários.
+        Usa TradeLimitManager para controle RIGOROSO.
         Inclui circuit breakers graduais.
         Returns: True se pode operar, False se deve parar.
         """
@@ -807,10 +825,30 @@ class LoboSystem:
         if self.daily_stats['limit_reached']:
             return False
 
-        # Verifica máximo de trades
-        if self.daily_stats['trades_today'] >= self.daily_limits['max_trades']:
-            system_logger.info(f"⚠️ Máximo de trades diários atingido ({self.daily_limits['max_trades']})")
-            return False
+        # V4.3: Usa TradeLimitManager para verificação RIGOROSA
+        if HAS_V43:
+            try:
+                # Sincroniza modo emergência
+                is_emergency = getattr(self, 'emergency_mode_active', False)
+                trade_limit_manager.set_emergency_mode(is_emergency)
+
+                can_trade, reason, remaining = trade_limit_manager.can_trade()
+                if not can_trade:
+                    system_logger.warning(f"⚠️ V4.3 TradeLimitManager: {reason}")
+                    return False
+
+                # Alerta quando próximo do limite
+                if remaining <= 3:
+                    system_logger.warning(f"⚠️ ATENÇÃO: Apenas {remaining} trades restantes!")
+
+            except TradeLimitExceededError as e:
+                system_logger.error(f"🚫 LIMITE EXCEDIDO: {e}")
+                return False
+        else:
+            # Fallback para verificação legacy
+            if self.daily_stats['trades_today'] >= self.daily_limits['max_trades']:
+                system_logger.info(f"⚠️ Máximo de trades diários atingido ({self.daily_limits['max_trades']})")
+                return False
 
         # V4.1: Verifica circuit breakers graduais
         can_trade, exposure_mult, message = self._check_circuit_breakers()
@@ -1461,16 +1499,6 @@ class LoboSystem:
                 closed_positions.append(symbol)
                 continue
 
-            # V4.1 FIX: Timeout forçado após 2h (independente do P&L)
-            if open_hours >= 2.0:
-                system_logger.warning(
-                    f"🚨 TIMEOUT FORÇADO: {symbol} aberta há {open_hours:.1f}h - Fechando!"
-                )
-                close_price = current_price if current_price > 0 else entry_price
-                self._close_crypto_position(symbol, close_price, f'FORCED_TIMEOUT_{open_hours:.0f}H')
-                closed_positions.append(symbol)
-                continue
-
             # Se não há preço atual ou entry_price, pula para próxima iteração
             if current_price <= 0:
                 system_logger.warning(f"⚠️ {symbol}: Sem preço atual disponível")
@@ -1482,21 +1510,69 @@ class LoboSystem:
 
             pnl_pct = (current_price - entry_price) / entry_price
 
-            # Verifica timeout normal
-            if open_hours >= self.position_timeout_hours:
-                # Só fecha se P&L > limite mínimo
-                if pnl_pct >= self.stale_position_min_pnl:
+            # V4.3: Usa DynamicTimeoutManager para timeout proporcional ao TP/SL
+            if HAS_V43:
+                # Prepara dados da posição para timeout dinâmico
+                position_for_timeout = {
+                    'entry_time': entry_time,
+                    'take_profit': position.get('take_profit_pct', self.crypto_take_profit),
+                    'stop_loss': position.get('stop_loss_pct', self.crypto_stop_loss),
+                    'volatility': position.get('volatility', 1.0),
+                    'entry_level': position.get('signal_level', 'MODERATE'),
+                    'entry_price': entry_price
+                }
+
+                should_timeout, timeout_reason, age_hours = dynamic_timeout_manager.should_timeout(
+                    position_for_timeout, current_price
+                )
+
+                if should_timeout:
                     system_logger.warning(
-                        f"⏰ TIMEOUT: {symbol} aberta há {open_hours:.1f}h "
-                        f"com P&L {pnl_pct*100:+.2f}% - Fechando..."
+                        f"⏰ V4.3 TIMEOUT DINÂMICO: {symbol} - {timeout_reason}"
                     )
-                    self._close_crypto_position(symbol, current_price, f'TIMEOUT_{open_hours:.0f}H')
+                    self._close_crypto_position(symbol, current_price, f'V43_TIMEOUT_DINAMICO')
                     closed_positions.append(symbol)
-                else:
+                    continue
+
+                # V4.3: Verifica SmartTrailingStop
+                trailing_close, trailing_reason, trailing_pnl = smart_trailing_stop.should_close_trailing(
+                    symbol, position_for_timeout, current_price
+                )
+
+                if trailing_close:
                     system_logger.info(
-                        f"⏰ {symbol}: Timeout mas P&L {pnl_pct*100:.2f}% < {self.stale_position_min_pnl*100:.1f}% "
-                        f"- Mantendo posição (máx 2h)"
+                        f"🔒 V4.3 SMART TRAILING: {symbol} - {trailing_reason}"
                     )
+                    self._close_crypto_position(symbol, current_price, f'V43_SMART_TRAILING')
+                    closed_positions.append(symbol)
+                    continue
+            else:
+                # Fallback para timeout legado
+                # V4.1 FIX: Timeout forçado após 2h (independente do P&L)
+                if open_hours >= 2.0:
+                    system_logger.warning(
+                        f"🚨 TIMEOUT FORÇADO: {symbol} aberta há {open_hours:.1f}h - Fechando!"
+                    )
+                    close_price = current_price if current_price > 0 else entry_price
+                    self._close_crypto_position(symbol, close_price, f'FORCED_TIMEOUT_{open_hours:.0f}H')
+                    closed_positions.append(symbol)
+                    continue
+
+                # Verifica timeout normal
+                if open_hours >= self.position_timeout_hours:
+                    # Só fecha se P&L > limite mínimo
+                    if pnl_pct >= self.stale_position_min_pnl:
+                        system_logger.warning(
+                            f"⏰ TIMEOUT: {symbol} aberta há {open_hours:.1f}h "
+                            f"com P&L {pnl_pct*100:+.2f}% - Fechando..."
+                        )
+                        self._close_crypto_position(symbol, current_price, f'TIMEOUT_{open_hours:.0f}H')
+                        closed_positions.append(symbol)
+                    else:
+                        system_logger.info(
+                            f"⏰ {symbol}: Timeout mas P&L {pnl_pct*100:.2f}% < {self.stale_position_min_pnl*100:.1f}% "
+                            f"- Mantendo posição (máx 2h)"
+                        )
 
         return closed_positions
 
@@ -2084,7 +2160,28 @@ class LoboSystem:
             override = self._check_strong_buy_override(crypto, filter_result)
             if override['override']:
                 system_logger.info(f"      🔥 STRONG_BUY OVERRIDE ATIVADO!")
-                crypto['_signal_level'] = 'STRONG_OVERRIDE'
+
+                # V4.3: Valida STRONG_OVERRIDE com critérios rigorosos
+                if HAS_V43:
+                    # Detecta regime de mercado
+                    market_data = {
+                        'ema_trend': crypto.get('ema_trend', 0),
+                        'volatility': crypto.get('volatility', 1.0),
+                        'adx': crypto.get('adx', 25),
+                        'btc_change_24h': crypto.get('btc_change_24h', 0)
+                    }
+                    regime = adaptive_filter.detect_regime(market_data)
+
+                    is_valid, reason, final_level = strong_override_validator.validate(crypto, regime)
+                    if not is_valid:
+                        system_logger.warning(f"      ⚠️ V4.3: STRONG_OVERRIDE rebaixado para {final_level.value}")
+                        crypto['_signal_level'] = final_level.value
+                        crypto['_original_level'] = 'STRONG_OVERRIDE'
+                    else:
+                        crypto['_signal_level'] = 'STRONG_OVERRIDE'
+                else:
+                    crypto['_signal_level'] = 'STRONG_OVERRIDE'
+
                 crypto['_level_params'] = override['params']
                 crypto['_filter_score'] = filter_result['total_points']
                 crypto['_regime'] = self.current_regime
@@ -2104,6 +2201,32 @@ class LoboSystem:
                     self.rejection_stats['reasons'][reason_key] = 0
                 self.rejection_stats['reasons'][reason_key] += 1
                 continue
+
+            # V4.3: Aplica filtros adaptativos por regime de mercado
+            if HAS_V43:
+                market_data = {
+                    'ema_trend': crypto.get('ema_trend', 0),
+                    'volatility': crypto.get('volatility', 1.0),
+                    'adx': crypto.get('adx', 25),
+                    'btc_change_24h': crypto.get('btc_change_24h', 0)
+                }
+                regime = adaptive_filter.detect_regime(market_data)
+
+                filter_approved, filter_reason, filter_details = adaptive_filter.apply_regime_filter(
+                    crypto, regime
+                )
+
+                if not filter_approved:
+                    system_logger.info(f"      ❌ V4.3 REJECT: {filter_reason}")
+                    self.rejection_stats['total_rejected'] += 1
+                    reason_key = f"V4.3_{regime.value}"
+                    if reason_key not in self.rejection_stats['reasons']:
+                        self.rejection_stats['reasons'][reason_key] = 0
+                    self.rejection_stats['reasons'][reason_key] += 1
+                    continue
+
+                # Atualiza regime detectado pelo V4.3
+                signal_level['regime'] = regime.value.upper()
 
             # V3.1: Sinal aprovado!
             crypto['_signal_level'] = signal_level['level']
@@ -2234,7 +2357,11 @@ class LoboSystem:
         # Registra cooldown (será atualizado com win/loss no close)
         self.last_trade_time[symbol] = now
 
-        system_logger.info(f"\n🟢 COMPRA V3.0 EXECUTADA: {symbol}")
+        # V4.3: Registra trade no TradeLimitManager
+        if HAS_V43:
+            post_trade_actions(symbol, signal_level)
+
+        system_logger.info(f"\n🟢 COMPRA V4.3 EXECUTADA: {symbol}")
         system_logger.info(f"   Nível: {signal_level} | Filtros: {filter_score}pts | Regime: {regime}")
         system_logger.info(f"   Quantidade: {quantity:.6f}")
         system_logger.info(f"   Preço: ${price:.2f}")
