@@ -203,6 +203,94 @@ notifications:
   telegram_token: ""
   telegram_chat_id: ""
 
+# ==================== CONFIGURACOES V4.3 CORRECOES CRITICAS ====================
+
+# V4.3: Trade Limit Manager - Controle RIGOROSO de limites
+trade_limits:
+  # Limite normal de trades diários
+  max_daily_trades: 20
+
+  # Limite em modo emergência
+  emergency_max_trades: 35
+
+  # Alertar quando restarem X trades
+  alert_threshold: 3
+
+# V4.3: Filtros Adaptativos por Regime de Mercado
+adaptive_filters:
+  enabled: true
+
+  # Configurações por regime
+  bull:
+    min_score: 40
+    max_rsi: 70
+    min_rsi: 30
+    min_volume_ratio: 1.0
+
+  bear:
+    min_score: 50        # Mais restritivo em bear
+    max_rsi: 40          # Apenas oversold
+    min_rsi: 10
+    min_volume_ratio: 1.2
+
+  lateral:
+    min_score: 45
+    max_rsi: 65
+    min_rsi: 35
+    min_volume_ratio: 1.1
+
+  volatile:
+    min_score: 55
+    max_rsi: 60
+    min_rsi: 40
+    min_volume_ratio: 1.3
+
+# V4.3: Timeout Dinâmico baseado em TP/SL
+dynamic_timeout:
+  enabled: true
+
+  # Timeout base = TP% / ratio
+  base_timeout_ratio: 0.5   # TP 2% = 1h timeout
+
+  # Limites de timeout
+  min_timeout_hours: 0.5    # Mínimo 30 min
+  max_timeout_hours: 4.0    # Máximo 4 horas
+
+  # Multiplicadores por nível de sinal
+  level_multipliers:
+    STRONG_OVERRIDE: 1.5
+    STRONG: 1.3
+    MODERATE: 1.0
+    WEAK: 0.7
+
+# V4.3: Smart Trailing Stop
+smart_trailing:
+  enabled: true
+
+  # Distância do trailing (abaixo do pico)
+  trailing_distance_pct: 0.5
+
+  # Níveis de ativação por tipo de sinal
+  activation_levels:
+    STRONG_OVERRIDE: 1.0   # Ativa após 1% de lucro
+    STRONG: 1.5            # Ativa após 1.5%
+    MODERATE: 2.0          # Ativa após 2%
+    WEAK: 2.5              # Ativa após 2.5%
+
+# V4.3: Validação Rigorosa de STRONG_OVERRIDE
+strong_override_validation:
+  enabled: true
+
+  # Critérios mínimos
+  min_score: 65
+  rsi_oversold: 30
+  rsi_overbought: 70
+  min_volume_ratio: 1.5
+  min_confirmed_indicators: 2
+
+  # Requer alinhamento com regime
+  require_regime_alignment: true
+
 # ==================== CONFIGURACOES V4.2 EMERGENCIA ====================
 
 # Modo Emergencia - Override de limites durante crises
