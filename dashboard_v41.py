@@ -677,7 +677,7 @@ def render_recent_trades():
 
         st.dataframe(
             styled_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=400
         )
@@ -782,7 +782,7 @@ def render_system_status():
             </div>
             """, unsafe_allow_html=True)
 
-            if st.button("🛑 Desativar Emergência", use_container_width=True):
+            if st.button("🛑 Desativar Emergência", width="stretch"):
                 state['emergency_mode'] = {'active': False}
                 save_system_state(state)
                 st.rerun()
@@ -852,11 +852,11 @@ def render_actions():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if st.button("🔄 Atualizar", use_container_width=True):
+        if st.button("🔄 Atualizar", width="stretch"):
             st.rerun()
 
     with col2:
-        if st.button("✅ Validar Sistema", use_container_width=True):
+        if st.button("✅ Validar Sistema", width="stretch"):
             with st.spinner("Validando..."):
                 time.sleep(1)
                 st.success("Sistema validado!")
@@ -874,7 +874,7 @@ def render_actions():
             json.dumps(report, indent=2, default=str),
             file_name=f"lobo_report_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
             mime="application/json",
-            use_container_width=True
+            width="stretch"
         )
 
 
